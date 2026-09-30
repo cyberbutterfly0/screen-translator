@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# 本地数据与密钥，绝不提交
+config.json
+history.json
+.devdata/
+.env
+
+# 临时调试文件（本项目约定 _ 开头）
+_*.py
+_*.png
+*.log

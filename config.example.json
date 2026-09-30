@@ -1,0 +1,19 @@
+{
+  "api_key": "",
+  "base_url": "https://api.deepseek.com",
+  "model": "deepseek-flash",
+  "detail": "original",
+  "timeout": 90,
+  "hotkey": "ctrl+alt+t",
+  "show_explanation": true,
+  "explain_style": "brief",
+  "show_popup_at_cursor": true,
+  "popup_steal_focus": true,
+  "font_size": 11,
+  "popup_opacity": 0.96,
+  "popup_width": 560,
+  "popup_height": 420,
+  "history_enabled": true,
+  "max_history": 50,
+  "minimize_to_tray": true
+}
