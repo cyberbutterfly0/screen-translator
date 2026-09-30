@@ -47,7 +47,11 @@ python main.py
 
 - 在弹窗里先点「更多信息」，再点随后出现的「仍要运行」
 - 右键 exe → 属性 → 底部勾选「解除锁定」→ 确定，之后双击就不再拦
-- PowerShell 里执行 `Unblock-File .\ScreenTranslator.exe`
+- PowerShell 里执行 `Unblock-File`，**注意路径要写对**（`.\` 指当前目录，不是文件所在目录）：
+
+  ```powershell
+  Unblock-File "$env:USERPROFILE\Downloads\ScreenTranslator.exe"
+  ```
 
 不要为此整体关掉 SmartScreen，那会降低系统整体的防护。
 
