@@ -158,7 +158,19 @@ class ResultPopup:
             cursor="arrow",
             insertwidth=0,
         )
-        scroll = tk.Scrollbar(content, command=self.text.yview, width=10)
+        # 宽度和配色都调过：原来 width=10 且沿用 Tk 默认灰，在深色底上几乎看不出能拖。
+        # 槽用浮层底色（视觉上"隐形"），滑块用强边框色，悬停再提亮一档。
+        scroll = tk.Scrollbar(
+            content,
+            command=self.text.yview,
+            width=14,
+            troughcolor=theme.bg_overlay,
+            background=theme.label_tertiary,
+            activebackground=theme.label_secondary,
+            borderwidth=0,
+            relief="flat",
+            highlightthickness=0,
+        )
         self.text.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.text.pack(side="left", fill="both", expand=True)
