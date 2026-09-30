@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import base64
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +28,12 @@ APP_NAME = "屏幕翻译"
 ENTRY = ROOT / "main.py"
 ICON = ROOT / "icon.ico"
 
+#: 放快捷方式图标的目录名，**必须是纯英文**。
+#: 实测：快捷方式的 IconLocation 指向含非 ASCII 字符的路径时（例如
+#: `E:\dsh结算\翻译\icon.ico`），资源管理器会放弃加载、显示成默认文档图标，
+#: 而且在属性里手动改图标也无效——因为改完还是那个中文路径。
+ICON_DIR_NAME = "ScreenTranslator"
+
 #: 旧版本可能留下的快捷方式名字，装新的时一并清掉
 STALE_NAMES = ("ScreenTranslator.lnk", "屏幕翻译（源码版）.lnk")
 
@@ -34,6 +42,33 @@ def find_pythonw() -> Path | None:
     """优先用当前解释器同目录的 pythonw.exe。"""
     candidate = Path(sys.executable).with_name("pythonw.exe")
     return candidate if candidate.exists() else None
+
+
+def pick_shortcut_icon() -> Path:
+    """挑一个纯 ASCII 路径放快捷方式要用的图标。
+
+    项目路径本身是英文就直接用；否则把 icon.ico 复制到 %APPDATA% 下再引用。
+    """
+    if str(ICON).isascii():
+        return ICON
+
+    appdata = os.environ.get("APPDATA")
+    candidates = [
+        Path(appdata) / ICON_DIR_NAME if appdata else None,
+        Path(os.environ.get("ProgramData", r"C:\ProgramData")) / ICON_DIR_NAME,
+    ]
+    for base in candidates:
+        if base is None or not str(base).isascii():
+            continue
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            target = base / "icon.ico"
+            shutil.copy2(ICON, target)
+            return target
+        except OSError:
+            continue
+
+    return ICON
 
 
 def run_powershell(script: str) -> tuple[bool, str]:
@@ -54,7 +89,7 @@ def run_powershell(script: str) -> tuple[bool, str]:
     return result.returncode == 0, output or error
 
 
-def build_script(pythonw: Path) -> str:
+def build_script(pythonw: Path, icon: Path) -> str:
     """桌面路径交给 Windows 自己解析，兼容桌面被重定向到 OneDrive 的情况。"""
     stale_list = ", ".join(f"'{name}'" for name in STALE_NAMES)
     return f'''
@@ -76,7 +111,7 @@ $lnk = $sh.CreateShortcut($target)
 $lnk.TargetPath = "{pythonw}"
 $lnk.Arguments = '"{ENTRY}"'
 $lnk.WorkingDirectory = "{ROOT}"
-$lnk.IconLocation = "{ICON}"
+$lnk.IconLocation = "{icon}"
 $lnk.Description = "{APP_NAME}：源码方式启动，不触发 SmartScreen 警告"
 $lnk.Save()
 Write-Output "已创建快捷方式：$target"
@@ -98,7 +133,8 @@ def main() -> int:
         print(f"找不到入口文件 {ENTRY}")
         return 1
 
-    ok, message = run_powershell(build_script(pythonw))
+    icon = pick_shortcut_icon()
+    ok, message = run_powershell(build_script(pythonw, icon))
     print(message)
     if not ok:
         print(f'\n创建失败。也可以手动建：目标填 {pythonw}，参数填 "{ENTRY}"')
@@ -108,7 +144,7 @@ def main() -> int:
     print(f"  目标   : {pythonw}")
     print(f'  参数   : "{ENTRY}"')
     print(f"  起始于 : {ROOT}")
-    print(f"  图标   : {ICON}")
+    print(f"  图标   : {icon}")
     print()
     print("双击桌面上的「屏幕翻译」即可启动。")
     return 0
