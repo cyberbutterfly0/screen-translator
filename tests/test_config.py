@@ -157,6 +157,13 @@ class SecretFallbackTests(TempHomeTestCase):
             cfgmod.is_encrypted(cfgmod.encrypt_secret(self.SECRET)),
         )
 
+    def test_saved_config_reads_back_as_plaintext(self):
+        """不管加密可不可用，存进去的 Key 都要能原样读回来。"""
+        cfg = cfgmod.load_config()
+        cfg["api_key"] = self.SECRET
+        cfgmod.save_config(cfg)
+        self.assertEqual(cfgmod.load_config()["api_key"], self.SECRET)
+
 
 @unittest.skipUnless(sys.platform == "win32", "DPAPI 只在 Windows 上可用")
 class SecretProtectionTests(TempHomeTestCase):
@@ -186,12 +193,6 @@ class SecretProtectionTests(TempHomeTestCase):
         raw = cfgmod.config_path().read_text(encoding="utf-8")
         self.assertNotIn(self.SECRET, raw, "配置文件里不应该出现明文密钥")
         self.assertIn(cfgmod.SECRET_PREFIX, raw)
-
-    def test_saved_config_reads_back_as_plaintext(self):
-        cfg = cfgmod.load_config()
-        cfg["api_key"] = self.SECRET
-        cfgmod.save_config(cfg)
-        self.assertEqual(cfgmod.load_config()["api_key"], self.SECRET)
 
     def test_encrypted_value_is_recognizable(self):
         stored = cfgmod.encrypt_secret(self.SECRET)
