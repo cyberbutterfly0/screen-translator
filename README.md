@@ -35,6 +35,41 @@ python main.py
 
 首次启动后，在「设置」页填入 API Key，点「测试连接」确认能通，再点「保存设置」。
 
+## 下载后提示「Windows 已保护你的电脑」？
+
+这是 Windows Defender SmartScreen 对**未数字签名**程序的默认拦截，不是报毒。三个条件同时满足就会弹：
+
+1. exe 没有代码签名证书（个人开源项目通常不会为此付费）
+2. 文件是从互联网下载的，被 Windows 打上了「来自 Internet」标记
+3. 这个版本刚发布，SmartScreen 还没积累起下载信誉
+
+**想让它跑起来**，任选一种：
+
+- 在弹窗里先点「更多信息」，再点随后出现的「仍要运行」
+- 右键 exe → 属性 → 底部勾选「解除锁定」→ 确定，之后双击就不再拦
+- PowerShell 里执行 `Unblock-File .\ScreenTranslator.exe`
+
+不要为此整体关掉 SmartScreen，那会降低系统整体的防护。
+
+**想确认文件没被别人动过**，比对 SHA256：
+
+```powershell
+Get-FileHash .\ScreenTranslator.exe -Algorithm SHA256
+```
+
+每个版本 Release 资产的官方摘要可以直接查：
+
+```powershell
+gh release view v1.0.1 --json assets --jq '.assets[] | {name, digest}'
+```
+
+**为什么可以信任这个 exe**：它由 GitHub Actions 在公开的托管 runner 上、从本仓库的公开源码构建，
+构建配置就是仓库里的 `.github/workflows/release.yml`，任何人都能查看运行记录，
+也可以自己 `python build.py` 构建出功能相同的版本。
+
+**要彻底消除这个警告**只有一条路：买一张代码签名证书（OV 约每年千元级，EV 更贵但能立刻获得信誉），
+打包时用 `signtool` 签名。除此之外的办法都只是让用户多点一次按钮。
+
 ## 使用
 
 | 操作 | 结果 |
