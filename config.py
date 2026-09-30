@@ -80,15 +80,29 @@ class _DataBlob(ctypes.Structure):
     _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
 
 
+#: 最近一次 DPAPI 调用的 Win32 错误码，供自检和排查用
+_dpapi_last_error: int = 0
+
+
+def dpapi_last_error() -> int:
+    """返回最近一次 DPAPI 失败的错误码（0 表示没失败过）。"""
+    return _dpapi_last_error
+
+
 def _dpapi(data: bytes, decrypt: bool) -> bytes | None:
-    """调用 Windows DPAPI。不可用时返回 None，由调用方决定怎么降级。
+    """调用 Windows DPAPI。失败返回 None，错误码留在 :func:`dpapi_last_error`。
 
     CryptProtectData 加密出来的数据绑定当前 Windows 账户：
     文件被拷到别的机器、或被别的用户读到，都解不开。
+
+    这里用 ``WinDLL(..., use_last_error=True)`` 而不是 ``ctypes.windll``：
+    后者的 ``GetLastError()`` 可能已经被其他调用覆盖，读出来是个没意义的数字，
+    排查 DPAPI 失败时会被误导。
     """
+    global _dpapi_last_error
     try:
-        crypt32 = ctypes.windll.crypt32
-        kernel32 = ctypes.windll.kernel32
+        crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
         # buffer 必须活到 API 调用结束，这里靠局部变量持有引用
         buffer = ctypes.create_string_buffer(data, len(data))
@@ -98,12 +112,16 @@ def _dpapi(data: bytes, decrypt: bool) -> bytes | None:
         func = crypt32.CryptUnprotectData if decrypt else crypt32.CryptProtectData
         ok = func(ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out))
         if not ok or not blob_out.pbData:
+            _dpapi_last_error = ctypes.get_last_error()
             return None
+
+        _dpapi_last_error = 0
         try:
             return ctypes.string_at(blob_out.pbData, blob_out.cbData)
         finally:
             kernel32.LocalFree(blob_out.pbData)
     except Exception:
+        _dpapi_last_error = -1
         return None
 
 

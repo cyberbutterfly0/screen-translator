@@ -68,6 +68,32 @@ def check_config(report: Report) -> None:
     report.info(f"模型    : {cfg.get('model')}")
     report.info(f"快捷键  : {cfg.get('hotkey')}")
     report.info(f"外观    : {cfg.get('theme')}")
+    report.info(f"版本    : {cfgmod.APP_VERSION}")
+
+    # DPAPI 不可用时 API Key 只能明文落盘，这必须让用户知道
+    if cfgmod.encryption_available():
+        report.ok("DPAPI 加密可用（API Key 会加密保存）")
+    else:
+        report.fail(
+            f"DPAPI 加密不可用（错误码 {cfgmod.dpapi_last_error()}），"
+            "API Key 只能以明文保存"
+        )
+        report.info("常见原因：受限账户、沙箱环境、部分企业安全策略")
+
+    # 直接读文件原始内容（不经过 load_config 的解密），看落盘的到底是不是密文
+    try:
+        import json as _json
+
+        raw = _json.loads(cfgmod.config_path().read_text(encoding="utf-8"))
+        stored_raw = str(raw.get("api_key") or "")
+    except Exception:
+        stored_raw = ""
+
+    if stored_raw:
+        if cfgmod.is_encrypted(stored_raw):
+            report.ok("配置文件里的 API Key 已是密文")
+        else:
+            report.fail("配置文件里的 API Key 是**明文**存储的")
 
 
 def check_screen(report: Report) -> None:
