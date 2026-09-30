@@ -122,15 +122,14 @@ class ConfigIOTests(TempHomeTestCase):
         self.assertEqual(cfgmod.decrypt_secret(backup["api_key"]), "first-key")
 
 
-@unittest.skipUnless(sys.platform == "win32", "DPAPI 只在 Windows 上可用")
-class SecretProtectionTests(TempHomeTestCase):
-    SECRET = "sk-super-secret-value-1234567890"
+class SecretFallbackTests(TempHomeTestCase):
+    """不依赖真实 DPAPI 的密钥处理测试，任何环境都能跑。
 
-    def test_roundtrip(self):
-        stored = cfgmod.encrypt_secret(self.SECRET)
-        self.assertNotEqual(stored, self.SECRET)
-        self.assertTrue(stored.startswith(cfgmod.SECRET_PREFIX))
-        self.assertEqual(cfgmod.decrypt_secret(stored), self.SECRET)
+    失败路径用 mock 构造——受限 Windows 环境里 CryptProtectData 真的会失败，
+    那些机器上不该因为这些测试永远报红。
+    """
+
+    SECRET = "sk-super-secret-value-1234567890"
 
     def test_legacy_plaintext_still_reads(self):
         """旧版写在文件里的是明文，升级后必须还能读出来。"""
@@ -142,6 +141,43 @@ class SecretProtectionTests(TempHomeTestCase):
 
     def test_broken_ciphertext_returns_empty(self):
         self.assertEqual(cfgmod.decrypt_secret("dpapi:@@@不是 base64@@@"), "")
+
+    def test_plaintext_fallback_is_detectable(self):
+        """DPAPI 失败时必须能被调用方察觉，不能悄悄存明文。"""
+        with mock.patch.object(cfgmod, "_dpapi", return_value=None):
+            self.assertFalse(cfgmod.encryption_available(), "探测应报告加密不可用")
+            stored = cfgmod.encrypt_secret(self.SECRET)
+            self.assertEqual(stored, self.SECRET, "加密不可用时原样返回")
+            self.assertFalse(cfgmod.is_encrypted(stored), "调用方必须能看出这是明文")
+
+    def test_availability_reflects_reality(self):
+        """探测结果必须和实际加密行为一致，否则界面上的判断就是在骗人。"""
+        self.assertEqual(
+            cfgmod.encryption_available(),
+            cfgmod.is_encrypted(cfgmod.encrypt_secret(self.SECRET)),
+        )
+
+
+@unittest.skipUnless(sys.platform == "win32", "DPAPI 只在 Windows 上可用")
+class SecretProtectionTests(TempHomeTestCase):
+    """这些测试要求 DPAPI **真的能用**。
+
+    受限 Windows 环境（沙箱、受限账户、部分企业策略）里 CryptProtectData 会失败，
+    这时应当跳过而不是报红——"是 Windows"并不等于"DPAPI 可用"。
+    """
+
+    SECRET = "sk-super-secret-value-1234567890"
+
+    def setUp(self):
+        super().setUp()
+        if not cfgmod.encryption_available():
+            self.skipTest(f"当前环境 DPAPI 不可用（错误码 {cfgmod.dpapi_last_error()}）")
+
+    def test_roundtrip(self):
+        stored = cfgmod.encrypt_secret(self.SECRET)
+        self.assertNotEqual(stored, self.SECRET)
+        self.assertTrue(stored.startswith(cfgmod.SECRET_PREFIX))
+        self.assertEqual(cfgmod.decrypt_secret(stored), self.SECRET)
 
     def test_saved_file_contains_no_plaintext(self):
         cfg = cfgmod.load_config()
@@ -160,18 +196,6 @@ class SecretProtectionTests(TempHomeTestCase):
     def test_encrypted_value_is_recognizable(self):
         stored = cfgmod.encrypt_secret(self.SECRET)
         self.assertTrue(cfgmod.is_encrypted(stored))
-
-    def test_plaintext_fallback_is_detectable(self):
-        """DPAPI 失败时必须能被调用方察觉，不能悄悄存明文。
-
-        早期版本 encrypt_secret 在 CryptProtectData 失败时直接返回明文，
-        调用方无从分辨，而 README 却写着"密钥已加密"——这是文档与实现不符。
-        """
-        with mock.patch.object(cfgmod, "_dpapi", return_value=None):
-            self.assertFalse(cfgmod.encryption_available(), "探测应报告加密不可用")
-            stored = cfgmod.encrypt_secret(self.SECRET)
-            self.assertEqual(stored, self.SECRET, "加密不可用时原样返回")
-            self.assertFalse(cfgmod.is_encrypted(stored), "调用方必须能看出这是明文")
 
 
 class VersionTests(unittest.TestCase):
