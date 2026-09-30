@@ -24,6 +24,21 @@ def get_logger() -> logging.Logger:
     return logging.getLogger(LOGGER_NAME)
 
 
+def ensure_utf8_stdio() -> None:
+    """把 stdout / stderr 切成 UTF-8。
+
+    Windows 英文版的默认控制台代码页是 cp1252，直接 print 中文会抛
+    UnicodeEncodeError —— 自检脚本在那种机器上会崩在打印标题的第一行，
+    什么有用信息都看不到。命令行脚本开头都该调这个。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream is not None and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 - 改不了也不该影响主流程
+            pass
+
+
 def setup_logging(level: int = logging.INFO) -> logging.Logger:
     """配置日志。重复调用安全（不会重复挂 handler）。"""
     logger = logging.getLogger(LOGGER_NAME)

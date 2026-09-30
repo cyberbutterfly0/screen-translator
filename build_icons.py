@@ -400,4 +400,7 @@ def build_app_icon() -> None:
 
 
 if __name__ == "__main__":
+    import applog
+
+    applog.ensure_utf8_stdio()
     raise SystemExit(build_icons())

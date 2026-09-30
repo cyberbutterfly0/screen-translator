@@ -14,6 +14,8 @@ from __future__ import annotations
 import argparse
 import traceback
 
+import applog
+
 OK = "[ OK ]"
 FAIL = "[FAIL]"
 
@@ -128,6 +130,7 @@ def check_api(report: Report) -> None:
 
 
 def main() -> int:
+    applog.ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description="屏幕翻译环境自检")
     parser.add_argument("--api", action="store_true", help="额外做一次真实的模型调用")
     args = parser.parse_args()

@@ -70,4 +70,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import applog
+
+    applog.ensure_utf8_stdio()
     raise SystemExit(main())
