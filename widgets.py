@@ -552,6 +552,86 @@ class SectionTitle(tk.Frame):
         ).pack(side="left")
 
 
+class ThinScrollbar(tk.Canvas):
+    """自绘的细滚动条。
+
+    为什么不用 ``tk.Scrollbar``：Tk 9 在 Windows 上把它交给系统原生渲染，
+    ``background`` / ``troughcolor`` 这些选项**会被直接忽略**——不管把滑块
+    调成白色还是黑色，看到的都是系统那套浅灰，深色主题下几乎看不见。
+
+    这个实现只依赖 Canvas：槽与界面同色，滑块颜色完全可控，宽度可调。
+    用法和 ``tk.Scrollbar`` 一致（``command`` + ``set``）。
+    """
+
+    #: 滑块最小长度，太短不好抓
+    MIN_THUMB = 28
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        command: Callable[..., Any],
+        *,
+        width: int,
+        trough: str,
+        thumb: str,
+        thumb_hover: str,
+    ) -> None:
+        super().__init__(master, width=width, bg=trough, highlightthickness=0, bd=0)
+        self._command = command
+        self._bar_width = width
+        self._thumb_color = thumb
+        self._thumb_hover = thumb_hover
+        self._first = 0.0
+        self._last = 1.0
+        self._drag_offset = 0.0
+        self._thumb_id = self.create_rectangle(0, 0, 0, 0, outline="", fill=thumb)
+
+        self.bind("<Configure>", lambda _e: self._redraw())
+        self.bind("<Enter>", lambda _e: self.itemconfigure(self._thumb_id, fill=self._thumb_hover))
+        self.bind("<Leave>", lambda _e: self.itemconfigure(self._thumb_id, fill=self._thumb_color))
+        self.bind("<Button-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_drag)
+
+    def set(self, first: str | float, last: str | float) -> None:
+        """供 text 的 ``yscrollcommand`` 回调，签名与 tk.Scrollbar 一致。"""
+        self._first, self._last = float(first), float(last)
+        self._redraw()
+
+    def _geom(self) -> tuple[float, float, float]:
+        height = float(self.winfo_height())
+        top = self._first * height
+        bottom = self._last * height
+        if bottom - top < self.MIN_THUMB:
+            bottom = min(height, top + self.MIN_THUMB)
+        return height, top, bottom
+
+    def _redraw(self) -> None:
+        height, top, bottom = self._geom()
+        if height <= 1:
+            return
+        pad = 3
+        self.coords(self._thumb_id, pad, top + pad, self._bar_width - pad, bottom - pad)
+
+    def _on_press(self, event: tk.Event) -> None:
+        _height, top, bottom = self._geom()
+        if top <= event.y <= bottom:
+            self._drag_offset = event.y - top
+        else:
+            self._drag_offset = (bottom - top) / 2
+            self._scroll_to(event.y)
+
+    def _on_drag(self, event: tk.Event) -> None:
+        self._scroll_to(event.y)
+
+    def _scroll_to(self, y: int) -> None:
+        height = self.winfo_height() or 1
+        span = self._last - self._first
+        if span >= 1.0:
+            return
+        target = (y - self._drag_offset) / height
+        self._command("moveto", max(0.0, min(1.0 - span, target)))
+
+
 def separator(master: tk.Misc, theme: Theme) -> tk.Frame:
     line = tk.Frame(master, height=1, bg=theme.border_l1)
     line.pack(fill="x")

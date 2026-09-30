@@ -158,18 +158,16 @@ class ResultPopup:
             cursor="arrow",
             insertwidth=0,
         )
-        # 宽度和配色都调过：原来 width=10 且沿用 Tk 默认灰，在深色底上几乎看不出能拖。
-        # 槽用浮层底色（视觉上"隐形"），滑块用强边框色，悬停再提亮一档。
-        scroll = tk.Scrollbar(
+        # 用自绘滚动条：tk.Scrollbar 在 Windows 上由系统原生渲染，
+        # 颜色选项全被忽略，深色主题下怎么调都看不见。
+        # 槽跟界面同色，深色主题滑块用近白、浅色主题用近黑（label_primary 正好是这两端）。
+        scroll = w.ThinScrollbar(
             content,
             command=self.text.yview,
             width=14,
-            troughcolor=theme.bg_overlay,
-            background=theme.label_tertiary,
-            activebackground=theme.label_secondary,
-            borderwidth=0,
-            relief="flat",
-            highlightthickness=0,
+            trough=theme.bg_overlay,
+            thumb=theme.label_primary,
+            thumb_hover=theme.label_secondary,
         )
         self.text.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
