@@ -307,6 +307,8 @@ class App:
             meta_parts.append(f"{usage['total_tokens']} tokens")
         if result.model:
             meta_parts.append(result.model)
+        if result.notice:
+            meta_parts.append(result.notice)
         meta = "  ·  ".join(meta_parts)
 
         self.popup.show_result(

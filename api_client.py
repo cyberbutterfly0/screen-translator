@@ -2,6 +2,11 @@
 
 只依赖标准库（urllib），不引入 openai SDK，减小打包体积。
 
+关于多厂商兼容：
+协议走的是 OpenAI 兼容的 ``/chat/completions``，所以只要目标服务支持图片输入就能接。
+但 DeepSeek 有两个专有参数（``thinking`` 和 ``detail: "original"``），别家不认。
+请求被拒时会自动去掉它们重试一次，用户换厂商只需要改 Base URL 和模型名。
+
 模型说明：DeepSeek 目前只有 ``deepseek-flash`` 支持图片输入，
 ``deepseek-v4-pro`` 不支持视觉，改模型名时请注意。
 """
@@ -9,6 +14,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import io
 import json
 import time
@@ -20,6 +26,23 @@ from typing import Any
 #: 客户端先做一次保守缩放，避免整屏或多屏截图上传几十 MB。
 #: 长边超过这个值才缩放，正常框选的小图不会被处理。
 MAX_EDGE = 2000
+
+#: 这些参数只有 DeepSeek 认，换厂商被拒时会自动去掉。
+VENDOR_SPECIFIC_KEYS = ("thinking",)
+
+#: 服务端报错里出现这些词，就认定是"不认识某个参数"，触发降级重试。
+UNSUPPORTED_HINTS = (
+    "unrecognized",
+    "unknown",
+    "unsupported",
+    "not supported",
+    "extra",
+    "unexpected",
+    "invalid_request",
+    "不支持",
+    "未知参数",
+    "无效参数",
+)
 
 SYSTEM_PROMPT = """你是一个屏幕内容翻译与代码解释助手。用户会给你一张屏幕截图。
 
@@ -78,6 +101,8 @@ class Result:
     model: str = ""
     elapsed: float = 0.0
     usage: dict[str, Any] = field(default_factory=dict)
+    #: 兼容性降级之类的提示，会显示在小窗底部
+    notice: str = ""
 
 
 def _prepare_png(image_bytes: bytes) -> bytes:
@@ -144,6 +169,31 @@ def _build_payload(
     return payload
 
 
+def _looks_like_unsupported_param(message: str) -> bool:
+    low = message.lower()
+    return any(hint in low for hint in UNSUPPORTED_HINTS)
+
+
+def _degrade(payload: dict[str, Any]) -> dict[str, Any]:
+    """去掉别家厂商可能不认的参数，得到一份更通用的请求体。"""
+    slim = copy.deepcopy(payload)
+    for key in VENDOR_SPECIFIC_KEYS:
+        slim.pop(key, None)
+    # "original" 是 DeepSeek 独有的 detail 取值，OpenAI 只认 low/high/auto
+    for message in slim.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                image_url = part.get("image_url")
+                if isinstance(image_url, dict) and image_url.get("detail") == "original":
+                    image_url["detail"] = "high"
+    return slim
+
+
 def _post(url: str, payload: dict[str, Any], api_key: str, timeout: float) -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
@@ -180,16 +230,37 @@ def _post(url: str, payload: dict[str, Any], api_key: str, timeout: float) -> di
         raise ApiError(f"服务端返回了无法解析的内容：{raw[:300]}") from exc
 
 
+def _post_with_fallback(
+    url: str,
+    payload: dict[str, Any],
+    api_key: str,
+    timeout: float,
+    notes: list[str],
+) -> dict[str, Any]:
+    """先按完整参数请求；若被判定为"不认识某个参数"，去掉专有参数再试一次。
+
+    这样换到 OpenAI / 通义 / 智谱 等厂商时，用户只需要改 Base URL 和模型名。
+    """
+    try:
+        return _post(url, payload, api_key, timeout)
+    except ApiError as exc:
+        message = str(exc)
+        if not _looks_like_unsupported_param(message):
+            raise
+        notes.append("该服务不接受 DeepSeek 专有参数，已自动降级重试")
+        return _post(url, _degrade(payload), api_key, timeout)
+
+
 def _friendly_http_error(code: int, detail: str) -> str:
     base = {
-        400: "请求被拒绝（400），通常是图片格式或参数问题",
+        400: "请求被拒绝（400），通常是参数或图片格式问题",
         401: "API Key 无效或已过期（401），请在设置里重新填写",
-        402: "账户余额不足（402），请到 DeepSeek 平台充值",
+        402: "账户余额不足（402），请到对应平台充值",
         403: "没有访问权限（403）",
         404: "接口地址不存在（404），请检查 Base URL 是否填错",
         422: "请求参数有误（422）",
         429: "请求过于频繁或超出限额（429），稍后再试",
-        500: "DeepSeek 服务端错误（500），稍后重试",
+        500: "服务端错误（500），稍后重试",
         502: "网关错误（502），稍后重试",
         503: "服务暂时不可用（503），稍后重试",
     }.get(code, f"请求失败（HTTP {code}）")
@@ -253,19 +324,24 @@ def translate_image(
 
     started = time.monotonic()
     errors: list[str] = []
+    notes: list[str] = []
+
+    def finish(result: Result, resp: dict[str, Any], model: str) -> Result:
+        result.model = str(resp.get("model") or model)
+        result.usage = resp.get("usage") or {}
+        result.elapsed = time.monotonic() - started
+        result.notice = "；".join(notes)
+        return result
 
     # 第一轮：JSON 模式，解析最可靠。
     try:
         payload = _build_payload(
             image_bytes, cfg, want_explanation=want_explanation, json_mode=True
         )
-        resp = _post(url, payload, api_key, timeout)
+        resp = _post_with_fallback(url, payload, api_key, timeout, notes)
         text = _extract_content(resp)
         if text:
-            result = _parse_json_mode(text)
-            result.model = str(resp.get("model") or payload["model"])
-            result.usage = resp.get("usage") or {}
-            result.elapsed = time.monotonic() - started
+            result = finish(_parse_json_mode(text), resp, payload["model"])
             if result.translation:
                 return result
             errors.append("模型返回的 translation 为空")
@@ -282,13 +358,10 @@ def translate_image(
         payload = _build_payload(
             image_bytes, cfg, want_explanation=want_explanation, json_mode=False
         )
-        resp = _post(url, payload, api_key, timeout)
+        resp = _post_with_fallback(url, payload, api_key, timeout, notes)
         text = _extract_content(resp)
         if text:
-            result = _parse_plain(text)
-            result.model = str(resp.get("model") or payload["model"])
-            result.usage = resp.get("usage") or {}
-            result.elapsed = time.monotonic() - started
+            result = finish(_parse_plain(text), resp, payload["model"])
             if not want_explanation:
                 result.explanation = ""
             if result.translation:
@@ -319,8 +392,10 @@ def test_connection(cfg: dict[str, Any]) -> str:
         "stream": False,
         "thinking": {"type": "disabled"},
     }
-    resp = _post(url, payload, api_key, float(cfg.get("timeout") or 90))
+    notes: list[str] = []
+    resp = _post_with_fallback(url, payload, api_key, float(cfg.get("timeout") or 90), notes)
     model = resp.get("model") or payload["model"]
     usage = resp.get("usage") or {}
     tokens = usage.get("total_tokens", "?")
-    return f"连接正常，模型 {model} 已响应（本次消耗 {tokens} tokens）。"
+    suffix = f"（{'；'.join(notes)}）" if notes else ""
+    return f"连接正常，模型 {model} 已响应（本次消耗 {tokens} tokens）{suffix}"

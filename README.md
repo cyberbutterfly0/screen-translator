@@ -61,6 +61,27 @@ python main.py
 按 DeepSeek 官方计费，单张截图最多按 1024 tokens 计。一次框选翻译实际约 800-1000 tokens，
 off-peak 时段约 0.003 元，1 元钱能跑 300 次左右；峰值时段翻倍。
 
+## 换成其他厂商的模型
+
+调用层走的是 OpenAI 兼容协议，只要目标服务支持图片输入，理论上都能接：
+
+1. 在设置里把 Base URL 和模型名换成对方的，例如
+   - OpenAI：`https://api.openai.com/v1` + `gpt-4o-mini`
+   - 通义千问：`https://dashscope.aliyuncs.com/compatible-mode/v1` + `qwen-vl-max`
+   - 智谱：`https://open.bigmodel.cn/api/paas/v4` + `glm-4v-flash`
+2. 保存后点「测试连接」
+
+DeepSeek 有两个专有参数（关思考模式的 `thinking`、`detail: "original"`），别家不认。
+程序被拒时会自动去掉它们重试一次，并在小窗底部标注「已自动降级重试」，正常情况不需要改代码。
+
+需要注意：
+
+- Base URL 要带上对方要求的版本路径（OpenAI 兼容接口一般是 `/v1`），
+  程序会自动在后面补 `/chat/completions`
+- 有些新模型用 `max_completion_tokens` 取代了 `max_tokens`，如果报这个错，需要改
+  [api_client.py](api_client.py) 里的 `max_tokens`
+- 换厂商后翻译质量、代码理解能力、速度都会变，自己试一下再定
+
 ## 打包成单文件 exe
 
 ```powershell
