@@ -8,8 +8,11 @@
 
 from __future__ import annotations
 
+import base64
+import ctypes
 import json
 import os
+from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +66,73 @@ def history_path() -> Path:
     return config_dir() / "history.json"
 
 
+def log_path() -> Path:
+    return config_dir() / "app.log"
+
+
+# ---------------------------------------------------------------- 密钥保护
+
+#: 加密后的密钥在文件里的前缀。没有这个前缀的值按明文处理（兼容旧配置）。
+SECRET_PREFIX = "dpapi:"
+
+
+class _DataBlob(ctypes.Structure):
+    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+
+def _dpapi(data: bytes, decrypt: bool) -> bytes | None:
+    """调用 Windows DPAPI。不可用时返回 None，由调用方决定怎么降级。
+
+    CryptProtectData 加密出来的数据绑定当前 Windows 账户：
+    文件被拷到别的机器、或被别的用户读到，都解不开。
+    """
+    try:
+        crypt32 = ctypes.windll.crypt32
+        kernel32 = ctypes.windll.kernel32
+
+        # buffer 必须活到 API 调用结束，这里靠局部变量持有引用
+        buffer = ctypes.create_string_buffer(data, len(data))
+        blob_in = _DataBlob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_char)))
+        blob_out = _DataBlob()
+
+        func = crypt32.CryptUnprotectData if decrypt else crypt32.CryptProtectData
+        ok = func(ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out))
+        if not ok or not blob_out.pbData:
+            return None
+        try:
+            return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+        finally:
+            kernel32.LocalFree(blob_out.pbData)
+    except Exception:
+        return None
+
+
+def encrypt_secret(value: str) -> str:
+    """加密 API Key。DPAPI 不可用时原样存明文，保证程序仍然能用。"""
+    if not value:
+        return ""
+    blob = _dpapi(value.encode("utf-8"), decrypt=False)
+    if blob is None:
+        return value
+    return SECRET_PREFIX + base64.b64encode(blob).decode("ascii")
+
+
+def decrypt_secret(stored: str) -> str:
+    """解密 API Key。不带前缀的值是旧版写的明文，直接返回。"""
+    if not stored:
+        return ""
+    if not stored.startswith(SECRET_PREFIX):
+        return stored
+    try:
+        blob = base64.b64decode(stored[len(SECRET_PREFIX) :])
+    except Exception:
+        return ""
+    plain = _dpapi(blob, decrypt=True)
+    if plain is None:
+        return ""
+    return plain.decode("utf-8", errors="replace")
+
+
 def _ensure_dir() -> None:
     config_dir().mkdir(parents=True, exist_ok=True)
 
@@ -79,6 +149,7 @@ def load_config() -> dict[str, Any]:
         except (OSError, json.JSONDecodeError):
             # 配置损坏不该让程序起不来，直接用默认值继续。
             pass
+    cfg["api_key"] = decrypt_secret(str(cfg.get("api_key") or ""))
     return cfg
 
 
@@ -86,6 +157,7 @@ def save_config(cfg: dict[str, Any]) -> None:
     """写入配置（只保留已知字段，避免脏数据回流）。"""
     _ensure_dir()
     clean = {k: cfg.get(k, v) for k, v in DEFAULTS.items()}
+    clean["api_key"] = encrypt_secret(str(clean.get("api_key") or ""))
     config_path().write_text(
         json.dumps(clean, ensure_ascii=False, indent=2),
         encoding="utf-8",

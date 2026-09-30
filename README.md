@@ -64,8 +64,9 @@ python main.py
 
 配置和数据都在 `%APPDATA%\ScreenTranslator\`：
 
-- `config.json` —— 设置，**内含明文 API Key**
+- `config.json` —— 设置。API Key 用 Windows DPAPI 加密后保存（`dpapi:` 前缀）
 - `history.json` —— 历史记录，只有文本
+- `app.log` —— 运行日志，出问题时把它发给开发者
 
 字段模板见 `config.example.json`。开发时可以用环境变量 `SCREEN_TRANSLATOR_HOME`
 把数据目录指到别处，避免污染正式配置。
@@ -160,6 +161,10 @@ git push origin v1.0.1
 框选的屏幕截图会以 base64 发送到 `api.deepseek.com`。**不要用它框选包含密码、密钥、
 个人隐私的画面。** 程序只在本地保存 API Key 和翻译结果，不做其他上传。
 
+API Key 用 Windows DPAPI 加密存放，但它防的是"配置文件被拷到别的机器"和"别的用户读到"，
+**挡不住以你自己身份运行的恶意程序**——同账户的进程仍然可以调用 DPAPI 解密。
+从旧版本升级上来的明文 Key 会在下次保存设置时自动加密。
+
 ## 卸载
 
 1. 退出程序
@@ -175,7 +180,11 @@ python selftest.py --api
 ```
 
 它会依次检查依赖、配置、DPI 感知、截图尺寸是否与虚拟桌面一致、热键能否注册、
-图标资源是否齐全；加上 `--api` 还会真实调用一次模型。
+图标资源是否齐全；加上 `--api` 还会真实调用一次模型。每一项都独立捕获异常，
+所以一次就能拿到完整报告，不会在第一个坑上停住。
+
+程序自己的运行日志在 `%APPDATA%\ScreenTranslator\app.log`。未捕获的异常（含子线程）
+都会记进去——打包后的 exe 没有控制台，这是唯一能看到出错原因的地方，反馈问题时请带上它。
 
 ## License
 

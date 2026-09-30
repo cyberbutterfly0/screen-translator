@@ -23,6 +23,7 @@ from typing import Any, Callable
 from PIL import Image, ImageDraw
 
 import api_client
+import applog
 import capture as capture_mod
 import config as cfgmod
 import icons
@@ -99,6 +100,11 @@ def make_tray_image() -> Image.Image:
 
 class App:
     def __init__(self) -> None:
+        # 先建日志：后面任何一步炸了都要有记录可查（windowed exe 没有控制台）
+        self.log = applog.setup_logging()
+        applog.install_excepthooks(self.log)
+        self.log.info("启动 %s v%s", cfgmod.APP_TITLE, cfgmod.APP_VERSION)
+
         self.cfg = cfgmod.load_config()
         self.theme = theme_mod.resolve(theme_mod.normalize_mode(self.cfg.get("theme")))
         self._tasks: queue.Queue[Callable[[], None]] = queue.Queue()
@@ -159,8 +165,8 @@ class App:
                 break
             try:
                 task()
-            except Exception as exc:  # noqa: BLE001 - 单个任务出错不该拖垮主循环
-                print(f"[task error] {exc}", file=sys.stderr)
+            except Exception:  # noqa: BLE001 - 单个任务出错不该拖垮主循环
+                self.log.exception("主线程任务执行出错")
         if not self._quitting:
             try:
                 self._popup_visible = self.popup.visible
@@ -175,6 +181,7 @@ class App:
         try:
             import keyboard
         except Exception as exc:  # noqa: BLE001
+            self.log.exception("全局热键模块不可用")
             self.main_window.set_status(f"全局热键不可用：{exc}", self.theme.error)
             return
 
@@ -247,8 +254,8 @@ class App:
             try:
                 self.tray = pystray.Icon("ScreenTranslator", self._tray_image, cfgmod.APP_TITLE, menu)
                 self.tray.run()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[tray] {exc}", file=sys.stderr)
+            except Exception:  # noqa: BLE001
+                self.log.exception("托盘图标启动失败")
 
         threading.Thread(target=worker, name="tray", daemon=True).start()
 
@@ -345,8 +352,8 @@ class App:
             }
             try:
                 cfgmod.append_history(entry, int(self.cfg.get("max_history", 50)))
-            except OSError as exc:
-                print(f"[history] {exc}", file=sys.stderr)
+            except OSError:
+                self.log.exception("写历史记录失败")
 
     def _on_error(self, message: str, anchor: tuple[int, int, int, int], seq: int) -> None:
         if seq != self._request_seq:
@@ -373,8 +380,8 @@ class App:
         self.cfg["theme"] = mode
         try:
             cfgmod.save_config(self.cfg)
-        except OSError as exc:
-            print(f"[theme] 保存外观设置失败：{exc}", file=sys.stderr)
+        except OSError:
+            self.log.exception("保存外观设置失败")
         self.theme = theme_mod.resolve(mode)
         icons.store.clear()  # 旧颜色的图标缓存没用了
         self.main_window.cfg = self.cfg
@@ -385,6 +392,7 @@ class App:
         if self._quitting:
             return
         self._quitting = True
+        self.log.info("正常退出")
         self._unregister_hotkeys()
         try:
             if self.tray is not None:

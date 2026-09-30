@@ -1,4 +1,4 @@
-"""配置读写，以及"幽灵配置"的自动防护。
+"""配置读写、密钥保护，以及"幽灵配置"的自动防护。
 
 幽灵配置指的是：DEFAULTS 里定义了、但全项目没有任何地方消费的键。
 它会误导后来维护的人以为某项行为可配，所以这里用测试把它钉死。
@@ -41,7 +41,9 @@ class GhostConfigTests(unittest.TestCase):
         self.assertEqual(example, cfgmod.DEFAULTS, "config.example.json 的默认值与 DEFAULTS 不一致")
 
 
-class ConfigIOTests(unittest.TestCase):
+class TempHomeTestCase(unittest.TestCase):
+    """把配置目录指到临时目录，避免测试碰真实数据。"""
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["SCREEN_TRANSLATOR_HOME"] = self.tmp.name
@@ -50,6 +52,8 @@ class ConfigIOTests(unittest.TestCase):
         os.environ.pop("SCREEN_TRANSLATOR_HOME", None)
         self.tmp.cleanup()
 
+
+class ConfigIOTests(TempHomeTestCase):
     def test_missing_file_yields_defaults(self):
         self.assertEqual(cfgmod.load_config(), dict(cfgmod.DEFAULTS))
 
@@ -100,6 +104,42 @@ class ConfigIOTests(unittest.TestCase):
         masked = cfgmod.mask_key("sk-abcdefghijklmnopqrstuvwxyz")
         self.assertNotIn("ghijklmnop", masked)
         self.assertTrue(masked.startswith("sk-abc"))
+
+
+@unittest.skipUnless(sys.platform == "win32", "DPAPI 只在 Windows 上可用")
+class SecretProtectionTests(TempHomeTestCase):
+    SECRET = "sk-super-secret-value-1234567890"
+
+    def test_roundtrip(self):
+        stored = cfgmod.encrypt_secret(self.SECRET)
+        self.assertNotEqual(stored, self.SECRET)
+        self.assertTrue(stored.startswith(cfgmod.SECRET_PREFIX))
+        self.assertEqual(cfgmod.decrypt_secret(stored), self.SECRET)
+
+    def test_legacy_plaintext_still_reads(self):
+        """旧版写在文件里的是明文，升级后必须还能读出来。"""
+        self.assertEqual(cfgmod.decrypt_secret("sk-legacy-plain"), "sk-legacy-plain")
+
+    def test_empty_value_stays_empty(self):
+        self.assertEqual(cfgmod.encrypt_secret(""), "")
+        self.assertEqual(cfgmod.decrypt_secret(""), "")
+
+    def test_broken_ciphertext_returns_empty(self):
+        self.assertEqual(cfgmod.decrypt_secret("dpapi:@@@不是 base64@@@"), "")
+
+    def test_saved_file_contains_no_plaintext(self):
+        cfg = cfgmod.load_config()
+        cfg["api_key"] = self.SECRET
+        cfgmod.save_config(cfg)
+        raw = cfgmod.config_path().read_text(encoding="utf-8")
+        self.assertNotIn(self.SECRET, raw, "配置文件里不应该出现明文密钥")
+        self.assertIn(cfgmod.SECRET_PREFIX, raw)
+
+    def test_saved_config_reads_back_as_plaintext(self):
+        cfg = cfgmod.load_config()
+        cfg["api_key"] = self.SECRET
+        cfgmod.save_config(cfg)
+        self.assertEqual(cfgmod.load_config()["api_key"], self.SECRET)
 
 
 if __name__ == "__main__":
