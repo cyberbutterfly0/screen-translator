@@ -27,8 +27,8 @@ Windows 桌面小工具。按下全局快捷键框选屏幕上任意区域，松
 ## 安装
 
 ```powershell
-git clone <this-repo>
-cd <repo>
+git clone https://github.com/cyberbutterfly0/screen-translator.git
+cd screen-translator
 pip install -r requirements.txt
 python main.py
 ```
@@ -147,7 +147,8 @@ python build.py
 python selftest.py --api
 ```
 
-它会依次检查依赖、DPI 感知、截图尺寸是否与虚拟桌面一致、热键能否注册、API 是否通。
+它会依次检查依赖、配置、DPI 感知、截图尺寸是否与虚拟桌面一致、热键能否注册、
+图标资源是否齐全；加上 `--api` 还会真实调用一次模型。
 
 ## License
 
