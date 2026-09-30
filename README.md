@@ -30,32 +30,51 @@ Windows 桌面小工具。按下全局快捷键框选屏幕上任意区域，松
 git clone https://github.com/cyberbutterfly0/screen-translator.git
 cd screen-translator
 pip install -r requirements.txt
+python install.py     # 在桌面创建带图标的快捷方式
+```
+
+`install.py` 会在桌面生成一个指向 `pythonw.exe` 的快捷方式，图标用程序自带的 `icon.ico`。
+之后双击桌面图标就能启动，**不会触发任何安全警告**——因为启动的是 Python 官方签名的解释器，
+而不是一个未签名的打包产物。
+
+不想建快捷方式也可以直接跑：
+
+```powershell
 python main.py
 ```
 
 首次启动后，在「设置」页填入 API Key，点「测试连接」确认能通，再点「保存设置」。
 
-## 下载后提示「Windows 已保护你的电脑」？
+## 关于 SmartScreen 警告（只在用 exe 时才会遇到）
 
-这是 Windows Defender SmartScreen 对**未数字签名**程序的默认拦截，不是报毒。三个条件同时满足就会弹：
+Release 里提供的 exe 没有数字签名，双击时 Windows 可能弹「Windows 已保护你的电脑」。
+这是 SmartScreen 对**未签名程序**的拦截，不是报毒——满足下面任一情况就会弹：
 
-1. exe 没有代码签名证书（个人开源项目通常不会为此付费）
-2. 文件是从互联网下载的，被 Windows 打上了「来自 Internet」标记
-3. 这个版本刚发布，SmartScreen 还没积累起下载信誉
+- 文件从互联网下载，带着「来自 Internet」标记
+- 或者程序根本没有代码签名证书（Windows 11 对这类程序本身就会拦，**即使清掉标记也没用**）
 
-**想让它跑起来**，任选一种：
+**推荐直接用源码方式启动**（上面的 `install.py`），完全不经过这个检查，也绕开了下面说的路径问题。
 
-- 在弹窗里先点「更多信息」，再点随后出现的「仍要运行」
-- 右键 exe → 属性 → 底部勾选「解除锁定」→ 确定，之后双击就不再拦
-- PowerShell 里执行 `Unblock-File`，**注意路径要写对**（`.\` 指当前目录，不是文件所在目录）：
+### 一定要用 exe 的话
+
+先放行：
+
+- 弹窗里先点「更多信息」，再点随后出现的「仍要运行」
+- 或者右键 exe → 属性 → 底部勾选「解除锁定」
+- 或者 PowerShell 执行 `Unblock-File`，**路径要写对**（`.\` 指当前目录，不是文件所在目录）：
 
   ```powershell
   Unblock-File "$env:USERPROFILE\Downloads\ScreenTranslator.exe"
   ```
 
-不要为此整体关掉 SmartScreen，那会降低系统整体的防护。
+然后**务必把它放到纯英文路径下**（例如 `C:\ScreenTranslator\`）。放在含中文的目录里会直接启动失败，
+报 `Could not create temporary directory!`，原因见「已知限制」。
 
-**想确认文件没被别人动过**，比对 SHA256：
+不要为了省事整体关掉 SmartScreen，那会降低系统整体的防护。
+
+### 校验下载的文件
+
+比对 SHA256：
 
 ```powershell
 Get-FileHash .\ScreenTranslator.exe -Algorithm SHA256
@@ -67,12 +86,13 @@ Get-FileHash .\ScreenTranslator.exe -Algorithm SHA256
 gh release view v1.0.1 --json assets --jq '.assets[] | {name, digest}'
 ```
 
-**为什么可以信任这个 exe**：它由 GitHub Actions 在公开的托管 runner 上、从本仓库的公开源码构建，
-构建配置就是仓库里的 `.github/workflows/release.yml`，任何人都能查看运行记录，
-也可以自己 `python build.py` 构建出功能相同的版本。
+**为什么可以信任它**：exe 由 GitHub Actions 在公开的托管 runner 上、从本仓库的公开源码构建，
+构建配置就是 `.github/workflows/release.yml`，任何人都能查看运行记录，也可以自己 `python build.py` 复现。
 
-**要彻底消除这个警告**只有一条路：买一张代码签名证书（OV 约每年千元级，EV 更贵但能立刻获得信誉），
-打包时用 `signtool` 签名。除此之外的办法都只是让用户多点一次按钮。
+### 想彻底消除警告
+
+只有买代码签名证书一条路：OV 证书约每年千元级，但**签完初期照样会被拦**（微软要等下载量积累出信誉）；
+EV 证书更贵，好处是立刻获得信誉。除此之外的办法都只是让用户多点一次按钮。
 
 ## 使用
 
@@ -155,11 +175,17 @@ DeepSeek 有两个专有参数（关思考模式的 `thinking`、`detail: "origi
 ## 打包成单文件 exe
 
 ```powershell
-pip install pyinstaller
+pip install -r requirements-dev.txt
 python build.py
 ```
 
-产物是 `dist/ScreenTranslator.exe`，双击即可运行，目标机器不需要装 Python。
+产物是 `dist/ScreenTranslator.exe`，目标机器不需要装 Python。两点务必注意：
+
+- **产物必须放在纯英文路径下运行**。含中文的目录（比如 `E:\我的项目\dist\`）会让它
+  启动失败，报 `Could not create temporary directory!`，原因见「已知限制」
+- 这个 exe 没有数字签名，别人下载后会被 SmartScreen 拦一次，见上文
+
+自己用的话，**源码方式（`install.py`）比打包 exe 更省事**：不用打包、不弹警告、改了代码立刻生效。
 
 ## 开发
 
@@ -190,6 +216,9 @@ git push origin v1.0.1
 
 ## 已知限制
 
+- **打包的 exe 不能放在含中文的路径下**：PyInstaller 的 bootloader 处理自身路径时对非 ASCII
+  字符有问题，会报 `Could not create temporary directory!` 然后启动失败。
+  把 exe 挪到 `C:\ScreenTranslator\` 这类纯英文路径即可。**源码方式不受影响。**
 - **管理员权限的窗口**：目标窗口若以管理员身份运行，普通权限下的本程序可能收不到热键或截到黑屏，
   需要同样以管理员身份运行本程序。
 - **硬件加速画面**：视频播放器、部分游戏和开启硬件加速的 Electron 应用可能截到黑屏，
