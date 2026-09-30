@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -154,6 +156,59 @@ class SecretProtectionTests(TempHomeTestCase):
         cfg["api_key"] = self.SECRET
         cfgmod.save_config(cfg)
         self.assertEqual(cfgmod.load_config()["api_key"], self.SECRET)
+
+    def test_encrypted_value_is_recognizable(self):
+        stored = cfgmod.encrypt_secret(self.SECRET)
+        self.assertTrue(cfgmod.is_encrypted(stored))
+
+    def test_plaintext_fallback_is_detectable(self):
+        """DPAPI 失败时必须能被调用方察觉，不能悄悄存明文。
+
+        早期版本 encrypt_secret 在 CryptProtectData 失败时直接返回明文，
+        调用方无从分辨，而 README 却写着"密钥已加密"——这是文档与实现不符。
+        """
+        with mock.patch.object(cfgmod, "_dpapi", return_value=None):
+            self.assertFalse(cfgmod.encryption_available(), "探测应报告加密不可用")
+            stored = cfgmod.encrypt_secret(self.SECRET)
+            self.assertEqual(stored, self.SECRET, "加密不可用时原样返回")
+            self.assertFalse(cfgmod.is_encrypted(stored), "调用方必须能看出这是明文")
+
+
+class VersionTests(unittest.TestCase):
+    @staticmethod
+    def _parse(text: str) -> tuple[int, ...]:
+        parts: list[int] = []
+        for piece in text.split("."):
+            digits = "".join(ch for ch in piece if ch.isdigit())
+            parts.append(int(digits) if digits else 0)
+        return tuple(parts)
+
+    def test_version_is_not_behind_latest_tag(self):
+        """APP_VERSION 不能落后于最新 tag。
+
+        写成"必须相等"会在还没打 tag 的开发期误报，所以这里只禁止落后——
+        正好覆盖"发了新版却忘了改版本号"这个真实发生过的问题。
+        """
+        try:
+            result = subprocess.run(
+                ["git", "describe", "--tags", "--abbrev=0"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            self.skipTest("取不到 git 信息")
+
+        if result.returncode != 0 or not result.stdout.strip():
+            self.skipTest("不在 git 仓库里，或者还没有 tag")
+
+        tag = result.stdout.strip().lstrip("v")
+        self.assertGreaterEqual(
+            self._parse(cfgmod.APP_VERSION),
+            self._parse(tag),
+            f"config.py 里 APP_VERSION={cfgmod.APP_VERSION} 落后于最新 tag v{tag}，发版时忘了同步",
+        )
 
 
 if __name__ == "__main__":

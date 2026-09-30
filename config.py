@@ -18,7 +18,7 @@ from typing import Any
 
 APP_NAME = "ScreenTranslator"
 APP_TITLE = "屏幕翻译"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.4"
 
 #: 默认配置。新增字段时只要在这里补一行，旧配置文件会在读取时自动补齐。
 DEFAULTS: dict[str, Any] = {
@@ -107,8 +107,27 @@ def _dpapi(data: bytes, decrypt: bool) -> bytes | None:
         return None
 
 
+def is_encrypted(stored: str) -> bool:
+    """判断存盘的值到底是不是 DPAPI 密文。"""
+    return bool(stored) and stored.startswith(SECRET_PREFIX)
+
+
+def encryption_available() -> bool:
+    """探测 DPAPI 在当前环境里能不能用。
+
+    受限环境（沙箱、服务账户、部分企业策略）下 CryptProtectData 会失败。
+    调用方应该先问这个函数再决定要不要让明文落盘——
+    绝不能像早期版本那样加密失败还一声不吭地存明文。
+    """
+    return _dpapi(b"screen-translator-probe", decrypt=False) is not None
+
+
 def encrypt_secret(value: str) -> str:
-    """加密 API Key。DPAPI 不可用时原样存明文，保证程序仍然能用。"""
+    """加密 API Key。
+
+    DPAPI 不可用时返回**明文**（保证程序仍能用），但这种结果不带
+    ``SECRET_PREFIX``，调用方必须用 :func:`is_encrypted` 检查并在写盘前告知用户。
+    """
     if not value:
         return ""
     blob = _dpapi(value.encode("utf-8"), decrypt=False)

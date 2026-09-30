@@ -12,6 +12,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 版本号测试要读 git tag
 
       - uses: actions/setup-python@v5
         with:

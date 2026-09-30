@@ -577,6 +577,20 @@ class MainWindow:
                 self.var_key.set(self.cfg.get("api_key", ""))
                 self.set_status("已取消，API Key 保持不变。", self.theme.warn)
                 return
+
+        # DPAPI 不可用时会退化成明文落盘，必须让用户明确知情再写
+        plaintext_risk = bool(cfg.get("api_key")) and not cfgmod.encryption_available()
+        if plaintext_risk:
+            if not messagebox.askyesno(
+                "加密不可用",
+                "当前环境无法调用 Windows DPAPI，保存后 API Key 会以**明文**写入配置文件。\n\n"
+                "任何能读取该文件的程序都能看到它。仍要保存吗？",
+                parent=self.win,
+                default="no",
+            ):
+                self.set_status("已取消保存，API Key 没有写入。", self.theme.warn)
+                return
+
         if self._recorder is not None:
             self._recorder.stop_record(cancelled=False)
         self._on_save(cfg)
@@ -585,7 +599,10 @@ class MainWindow:
         self.key_input.set_readonly(True)
         self.key_edit_btn.set_text("修改")
         self.key_edit_btn.set_icon("key-round")
-        self.set_status("设置已保存。", self.theme.success)
+        if plaintext_risk:
+            self.set_status("设置已保存。注意：本次 API Key 是明文存储的。", self.theme.warn)
+        else:
+            self.set_status("设置已保存。", self.theme.success)
 
     def set_status(self, text: str, color: str | None = None) -> None:
         if not hasattr(self, "status"):
