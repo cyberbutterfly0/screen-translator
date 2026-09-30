@@ -1,24 +1,23 @@
-"""主窗口：快捷键录入、API 设置、历史记录。
+"""主窗口：设置与历史。
 
-关闭窗口（×）= 直接退出程序；最小化按钮 = 收进系统托盘。
+外观走 DeepSeek Harness 那套：极简、无彩色强调、细边框、紧凑间距。
+标题栏保留系统原生的（保住任务栏和 Alt+Tab 行为），但会通过 DWM 把标题栏
+染成和主题一致的颜色，避免浅色标题栏配深色内容区。
 """
 
 from __future__ import annotations
 
+import ctypes
 import threading
 import tkinter as tk
-import tkinter.font as tkfont
-from tkinter import ttk
 from typing import Any, Callable
 
 import api_client
 import config as cfgmod
-
-FONT_FAMILY = "Microsoft YaHei UI"
-MUTED = "#6b7280"
-OK_GREEN = "#1a7f37"
-ERR_RED = "#c0392b"
-REC_BG = "#fff6da"
+import icons
+import theme as theme_mod
+import widgets as w
+from theme import MODE_ICONS, MODE_LABELS, MODES, Theme
 
 MODIFIER_KEYSYMS = {
     "Control_L", "Control_R", "Shift_L", "Shift_R", "Alt_L", "Alt_R",
@@ -26,13 +25,28 @@ MODIFIER_KEYSYMS = {
     "Scroll_Lock", "ISO_Level3_Shift",
 }
 
-# Windows 上 tkinter 的修饰键位掩码
 MASK_SHIFT = 0x0001
 MASK_CTRL = 0x0004
 MASK_ALT = 0x20000
 
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
 
-def _build_hotkey_string(event: tk.Event) -> str | None:
+
+def apply_dark_titlebar(win: tk.Misc, dark: bool) -> None:
+    """让 Windows 原生标题栏跟随应用主题。"""
+    try:
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+        value = ctypes.c_int(1 if dark else 0)
+        for attribute in (DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD):
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)
+            )
+    except Exception:
+        pass
+
+
+def build_hotkey_string(event: tk.Event) -> str | None:
     """把一次按键事件翻译成 keyboard 库认识的热键字符串。"""
     keysym = event.keysym
     if keysym in MODIFIER_KEYSYMS:
@@ -52,71 +66,82 @@ def _build_hotkey_string(event: tk.Event) -> str | None:
     elif len(keysym) == 1:
         key = keysym.lower()
     elif not parts and event.char and event.char.strip():
-        # 没有修饰键时优先用真实字符，这样符号键也能录进来
         key = event.char.lower()
     else:
         key = keysym.lower()
 
     parts.append(key)
     if len(parts) == 1:
-        return None  # 至少要有一个修饰键，避免裸键抢全局输入
+        return None  # 至少要有修饰键，避免裸键抢全局输入
     return "+".join(parts)
 
 
 class HotkeyRecorder(tk.Frame):
-    """点一下，然后按下想要的组合键。"""
+    """显示当前快捷键，点一下进入录制状态，按下组合键即生效。"""
 
     def __init__(
         self,
         master: tk.Misc,
+        theme: Theme,
         value: str,
         *,
         on_pause: Callable[[], None],
         on_resume: Callable[[], None],
-        **kw: Any,
     ) -> None:
-        super().__init__(master, **kw)
+        self.theme = theme
         self.value = value
         self._on_pause = on_pause
         self._on_resume = on_resume
         self._recording = False
         self._bind_id: str | None = None
-        self.root = self.winfo_toplevel()
 
-        self.entry = tk.Entry(
-            self, width=22, font=(FONT_FAMILY, 10), justify="center",
-            relief="solid", bd=1, state="readonly", readonlybackground="white",
+        super().__init__(
+            master,
+            bg=theme.bg_layer2,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=theme.border_l2,
             cursor="hand2",
         )
-        self.entry.pack(side="left")
-        self.entry.configure(state="normal")
-        self.entry.insert(0, value)
-        self.entry.configure(state="readonly")
+        self.root = self.winfo_toplevel()
+        self._inner = tk.Frame(self, bg=theme.bg_layer2)
+        self._inner.pack(padx=10, pady=6)
 
-        self.hint = tk.Label(self, text="点这里，然后按下组合键", fg=MUTED, font=(FONT_FAMILY, 9))
-        self.hint.pack(side="left", padx=(8, 0))
+        photo = icons.icon("keyboard", 14, theme.label_secondary)
+        self._icon = tk.Label(self._inner, bg=theme.bg_layer2, bd=0)
+        if photo is not None:
+            self._icon.configure(image=photo)
+            self._icon.image = photo  # type: ignore[attr-defined]
+        self._icon.pack(side="left", padx=(0, 6))
 
-        self.entry.bind("<Button-1>", lambda _e: self.start_record())
-        self.entry.bind("<FocusIn>", lambda _e: self.start_record())
+        self._text = tk.Label(
+            self._inner,
+            text=value,
+            bg=theme.bg_layer2,
+            fg=theme.label_primary,
+            font=(w.MONO_FAMILY, w.SIZE_BODY),
+        )
+        self._text.pack(side="left")
 
-    def set_value(self, value: str) -> None:
-        self.value = value
-        self.entry.configure(state="normal")
-        self.entry.delete(0, "end")
-        self.entry.insert(0, value)
-        self.entry.configure(state="readonly")
+        for widget in (self, self._inner, self._icon, self._text):
+            widget.bind("<Button-1>", lambda _e: self.start_record())
+
+    # ---------- 录制 ----------
+
+    def _paint(self, bg: str, border: str, fg: str | None = None) -> None:
+        self.configure(bg=bg, highlightbackground=border)
+        for widget in (self._inner, self._icon, self._text):
+            widget.configure(bg=bg)
+        if fg:
+            self._text.configure(fg=fg)
 
     def start_record(self) -> None:
         if self._recording:
             return
         self._recording = True
         self._on_pause()
-        self.entry.configure(state="normal", bg=REC_BG)
-        self.entry.delete(0, "end")
-        self.entry.insert(0, "请按组合键…")
-        self.entry.configure(readonlybackground=REC_BG)
-        self.entry.configure(state="readonly")
-        self.hint.configure(text="Esc 取消")
+        self._paint(self.theme.bg_selected, self.theme.brand)
+        self._text.configure(text="请按组合键…", fg=self.theme.label_secondary)
         self._bind_id = self.root.bind("<KeyPress>", self._on_key, add="+")
 
     def stop_record(self, *, cancelled: bool = False) -> None:
@@ -129,10 +154,8 @@ class HotkeyRecorder(tk.Frame):
             except tk.TclError:
                 pass
             self._bind_id = None
-        self.entry.configure(readonlybackground="white")
-        if cancelled:
-            self.set_value(self.value)
-        self.hint.configure(text="点这里，然后按下组合键")
+        self._paint(self.theme.bg_layer2, self.theme.border_l2)
+        self._text.configure(text=self.value, fg=self.theme.label_primary)
         self._on_resume()
 
     def _on_key(self, event: tk.Event) -> str:
@@ -141,46 +164,124 @@ class HotkeyRecorder(tk.Frame):
         if event.keysym == "Escape":
             self.stop_record(cancelled=True)
             return "break"
-        hotkey = _build_hotkey_string(event)
+        hotkey = build_hotkey_string(event)
         if hotkey is None:
             return "break"  # 只按了修饰键，继续等主键
         self.value = hotkey
         self.stop_record()
-        self.set_value(hotkey)
         return "break"
 
 
 class MainWindow:
-    """独立 Toplevel 作为主窗口；root 本身始终隐藏，只当事件循环宿主。"""
+    """主窗口用独立 Toplevel，root 本身永远隐藏，只当事件循环宿主。"""
 
     def __init__(
         self,
         root: tk.Tk,
         cfg: dict[str, Any],
+        theme: Theme,
         *,
         on_save: Callable[[dict[str, Any]], None],
         on_quit: Callable[[], None],
         call_soon: Callable[[Callable[[], None]], None],
         on_hotkey_pause: Callable[[], None],
         on_hotkey_resume: Callable[[], None],
+        on_theme_change: Callable[[str], None],
     ) -> None:
         self.root = root
         self.cfg = cfg
+        self.theme = theme
         self._on_save = on_save
         self._on_quit = on_quit
         self._call_soon = call_soon
+        self._on_hotkey_pause = on_hotkey_pause
+        self._on_hotkey_resume = on_hotkey_resume
+        self._on_theme_change = on_theme_change
         self._recorder: HotkeyRecorder | None = None
+        self._tab = "settings"
+        self._hist_items: list[dict[str, Any]] = []
 
         win = tk.Toplevel(root)
         self.win = win
-        win.title(f"{cfgmod.APP_TITLE} v{cfgmod.APP_VERSION}")
-        win.configure(bg="#f7f8fa")
-        win.resizable(False, False)
+        win.title(cfgmod.APP_TITLE)
         win.protocol("WM_DELETE_WINDOW", self._on_quit)
         win.bind("<Unmap>", self._on_unmap)
+        win.resizable(False, False)
 
-        self._build(on_hotkey_pause, on_hotkey_resume)
+        self.rebuild()
         self._center()
+
+    # ---------- 外观 ----------
+
+    def set_theme(self, theme: Theme) -> None:
+        self.theme = theme
+        self.rebuild()
+
+    def rebuild(self) -> None:
+        """主题变了就整体重建：控件颜色在创建时写死，换肤靠重画最省心。"""
+        theme = self.theme
+        self.win.configure(bg=theme.bg_base)
+        for child in self.win.winfo_children():
+            child.destroy()
+
+        apply_dark_titlebar(self.win, theme.dark)
+
+        self.tabs = w.Tabs(
+            self.win,
+            theme,
+            [
+                ("settings", "设置", "settings"),
+                ("history", "历史", "history"),
+            ],
+            value=self._tab,
+            on_change=self._switch_tab,
+        )
+        self.tabs.pack(fill="x", padx=16, pady=(12, 0))
+
+        self._container = tk.Frame(self.win, bg=theme.bg_base)
+        self._container.pack(fill="both", expand=True)
+
+        self._settings_page = tk.Frame(self._container, bg=theme.bg_base)
+        self._history_page = tk.Frame(self._container, bg=theme.bg_base)
+        self._build_settings(self._settings_page)
+        self._build_history(self._history_page)
+
+        if self._tab == "settings":
+            self._settings_page.pack(fill="both", expand=True)
+        else:
+            self._history_page.pack(fill="both", expand=True)
+            self.refresh_history()
+
+        self.status = tk.Label(
+            self.win,
+            text="",
+            bg=theme.bg_base,
+            fg=theme.label_secondary,
+            font=(w.FONT_FAMILY, w.SIZE_SMALL),
+            anchor="w",
+        )
+        self.status.pack(fill="x", padx=18, pady=(0, 10))
+        self._resize()
+
+    def _switch_tab(self, key: str) -> None:
+        self._tab = key
+        self._settings_page.pack_forget()
+        self._history_page.pack_forget()
+        if key == "settings":
+            self._settings_page.pack(fill="both", expand=True)
+        else:
+            self._history_page.pack(fill="both", expand=True)
+            self.refresh_history()
+        self._resize()
+
+    def _resize(self) -> None:
+        self.win.update_idletasks()
+        width = max(560, self.win.winfo_reqwidth())
+        height = max(560, self.win.winfo_reqheight())
+        self.win.minsize(width, height)
+        x = max(0, (self.win.winfo_screenwidth() - width) // 2)
+        y = max(0, (self.win.winfo_screenheight() - height) // 3)
+        self.win.geometry(f"{width}x{height}+{x}+{y}")
 
     # ---------- 窗口状态 ----------
 
@@ -196,7 +297,8 @@ class MainWindow:
             self.win.deiconify()
             self.win.lift()
             self.win.focus_force()
-            self.refresh_history()
+            if self._tab == "history":
+                self.refresh_history()
         except tk.TclError:
             pass
 
@@ -205,22 +307,6 @@ class MainWindow:
             self.win.withdraw()
         except tk.TclError:
             pass
-
-    def _center(self) -> None:
-        """按内容实际需要的尺寸居中。
-
-        不同 DPI 缩放下字体像素高度不同，写死窗口尺寸会把内容裁掉，
-        所以这里量一次自然尺寸再定位。
-        """
-        self.win.update_idletasks()
-        w = min(self.win.winfo_reqwidth(), self.win.winfo_screenwidth() - 80)
-        h = min(self.win.winfo_reqheight(), self.win.winfo_screenheight() - 120)
-        self.win.minsize(w, h)
-        sw = self.win.winfo_screenwidth()
-        sh = self.win.winfo_screenheight()
-        x = max(0, (sw - w) // 2)
-        y = max(0, (sh - h) // 3)
-        self.win.geometry(f"{w}x{h}+{x}+{y}")
 
     def _on_unmap(self, event: tk.Event) -> None:
         if event.widget is not self.win:
@@ -233,138 +319,210 @@ class MainWindow:
         except tk.TclError:
             pass
 
-    # ---------- 构建 ----------
+    def _center(self) -> None:
+        self._resize()
 
-    def _build(
-        self,
-        on_hotkey_pause: Callable[[], None],
-        on_hotkey_resume: Callable[[], None],
-    ) -> None:
-        notebook = ttk.Notebook(self.win)
-        notebook.pack(fill="both", expand=True, padx=10, pady=(10, 6))
-        notebook.bind("<<NotebookTabChanged>>", lambda _e: self.refresh_history())
+    # ---------- 设置页 ----------
 
-        settings = tk.Frame(notebook, bg="#f7f8fa")
-        history = tk.Frame(notebook, bg="#f7f8fa")
-        notebook.add(settings, text="  设置  ")
-        notebook.add(history, text="  历史  ")
+    def _field_label(self, parent: tk.Frame, row: int, text: str) -> None:
+        tk.Label(
+            parent,
+            text=text,
+            bg=self.theme.bg_base,
+            fg=self.theme.label_secondary,
+            font=(w.FONT_FAMILY, w.SIZE_BODY),
+        ).grid(row=row, column=0, sticky="w", padx=(0, 14), pady=5)
 
-        self._build_settings(settings, on_hotkey_pause, on_hotkey_resume)
-        self._build_history(history)
-
-        self.status = tk.Label(
-            self.win, text="", bg="#f7f8fa", fg=MUTED,
-            font=(FONT_FAMILY, 9), anchor="w", padx=14,
-        )
-        self.status.pack(fill="x", side="bottom", pady=(0, 8))
-
-    def _build_settings(
-        self,
-        parent: tk.Frame,
-        on_hotkey_pause: Callable[[], None],
-        on_hotkey_resume: Callable[[], None],
-    ) -> None:
+    def _build_settings(self, parent: tk.Frame) -> None:
+        theme = self.theme
         cfg = self.cfg
+        page = tk.Frame(parent, bg=theme.bg_base)
+        page.pack(fill="both", expand=True, padx=18, pady=(16, 4))
 
-        api_box = ttk.LabelFrame(parent, text=" API ")
-        api_box.pack(fill="x", padx=2, pady=(6, 8))
-        api_box.columnconfigure(1, weight=1)
+        # —— API ——
+        w.SectionTitle(page, theme, "API", icon_name="plug-zap").pack(anchor="w")
+        form = tk.Frame(page, bg=theme.bg_base)
+        form.pack(fill="x", pady=(10, 0))
+        form.columnconfigure(1, weight=1)
 
-        ttk.Label(api_box, text="API Key").grid(row=0, column=0, sticky="w", padx=(10, 8), pady=6)
+        self._field_label(form, 0, "API Key")
         self.var_key = tk.StringVar(value=cfg.get("api_key", ""))
-        key_row = tk.Frame(api_box, bg="#f7f8fa")
-        key_row.grid(row=0, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=6)
-        key_row.columnconfigure(0, weight=1)
-        self.key_entry = ttk.Entry(key_row, textvariable=self.var_key, show="*")
-        self.key_entry.grid(row=0, column=0, sticky="ew")
-        self._show_key = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            key_row, text="显示", variable=self._show_key,
-            command=lambda: self.key_entry.configure(show="" if self._show_key.get() else "*"),
-        ).grid(row=0, column=1, padx=(6, 0))
+        self.key_input = w.Input(form, theme, textvariable=self.var_key, show="•", width=34)
+        self.key_input.grid(row=0, column=1, columnspan=2, sticky="ew", pady=5)
 
-        ttk.Label(api_box, text="Base URL").grid(row=1, column=0, sticky="w", padx=(10, 8), pady=6)
+        self._field_label(form, 1, "Base URL")
         self.var_base = tk.StringVar(value=cfg.get("base_url", ""))
-        ttk.Entry(api_box, textvariable=self.var_base).grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=6)
+        w.Input(form, theme, textvariable=self.var_base, width=34).grid(
+            row=1, column=1, columnspan=2, sticky="ew", pady=5
+        )
 
-        ttk.Label(api_box, text="模型").grid(row=2, column=0, sticky="w", padx=(10, 8), pady=6)
+        self._field_label(form, 2, "模型")
         self.var_model = tk.StringVar(value=cfg.get("model", ""))
-        ttk.Entry(api_box, textvariable=self.var_model).grid(row=2, column=1, sticky="ew", pady=6)
-
-        ttk.Label(api_box, text="超时(秒)").grid(row=3, column=0, sticky="w", padx=(10, 8), pady=6)
+        w.Input(form, theme, textvariable=self.var_model, width=18).grid(
+            row=2, column=1, sticky="ew", pady=5
+        )
+        timeout_box = tk.Frame(form, bg=theme.bg_base)
+        timeout_box.grid(row=2, column=2, sticky="e", padx=(10, 0), pady=5)
+        tk.Label(
+            timeout_box, text="超时(秒)", bg=theme.bg_base, fg=theme.label_secondary,
+            font=(w.FONT_FAMILY, w.SIZE_BODY),
+        ).pack(side="left", padx=(0, 8))
         self.var_timeout = tk.StringVar(value=str(cfg.get("timeout", 90)))
-        ttk.Entry(api_box, textvariable=self.var_timeout, width=8).grid(row=3, column=1, sticky="w", pady=6)
+        w.Input(timeout_box, theme, textvariable=self.var_timeout, width=5).pack(side="left")
 
-        test_row = tk.Frame(api_box, bg="#f7f8fa")
-        test_row.grid(row=4, column=0, columnspan=3, sticky="w", padx=10, pady=(2, 10))
-        self.test_btn = ttk.Button(test_row, text="测试连接", command=self._test_connection)
+        test_row = tk.Frame(page, bg=theme.bg_base)
+        test_row.pack(fill="x", pady=(12, 0))
+        self.test_btn = w.Button(
+            test_row, theme, "测试连接", icon_name="plug-zap", command=self._test_connection
+        )
         self.test_btn.pack(side="left")
-        self.test_status = tk.Label(test_row, text="", bg="#f7f8fa", fg=MUTED, font=(FONT_FAMILY, 9))
+        self.test_status = tk.Label(
+            test_row, text="", bg=theme.bg_base, fg=theme.label_secondary,
+            font=(w.FONT_FAMILY, w.SIZE_SMALL),
+        )
         self.test_status.pack(side="left", padx=(10, 0))
 
-        hot_box = ttk.LabelFrame(parent, text=" 交互 ")
-        hot_box.pack(fill="x", padx=2, pady=(0, 8))
+        w.separator(page, theme)
+        tk.Frame(page, height=14, bg=theme.bg_base).pack()
 
-        ttk.Label(hot_box, text="截图快捷键").pack(side="left", padx=(10, 8), pady=10)
+        # —— 交互 ——
+        w.SectionTitle(page, theme, "交互", icon_name="keyboard").pack(anchor="w")
+        hot_row = tk.Frame(page, bg=theme.bg_base)
+        hot_row.pack(fill="x", pady=(10, 0))
+        tk.Label(
+            hot_row, text="截图快捷键", bg=theme.bg_base, fg=theme.label_secondary,
+            font=(w.FONT_FAMILY, w.SIZE_BODY),
+        ).pack(side="left", padx=(0, 14))
         self._recorder = HotkeyRecorder(
-            hot_box, cfg.get("hotkey", "ctrl+alt+t"),
-            on_pause=on_hotkey_pause, on_resume=on_hotkey_resume, bg="#f7f8fa",
+            hot_row, theme, cfg.get("hotkey", "ctrl+alt+t"),
+            on_pause=self._on_hotkey_pause, on_resume=self._on_hotkey_resume,
         )
         self._recorder.pack(side="left")
+        tk.Label(
+            hot_row, text="点一下，然后按下组合键", bg=theme.bg_base,
+            fg=theme.label_tertiary, font=(w.FONT_FAMILY, w.SIZE_SMALL),
+        ).pack(side="left", padx=(10, 0))
 
-        opt_box = ttk.LabelFrame(parent, text=" 输出 ")
-        opt_box.pack(fill="x", padx=2, pady=(0, 8))
+        w.separator(page, theme)
+        tk.Frame(page, height=14, bg=theme.bg_base).pack()
 
+        # —— 输出 ——
+        w.SectionTitle(page, theme, "输出", icon_name="code").pack(anchor="w")
+        options = tk.Frame(page, bg=theme.bg_base)
+        options.pack(fill="x", pady=(10, 0))
         self.var_explain = tk.BooleanVar(value=bool(cfg.get("show_explanation", True)))
-        ttk.Checkbutton(
-            opt_box, text="同时解释代码内容（低强度：整体作用 + 2-3 条关键点）",
+        w.Checkbox(
+            options, theme, "同时解释代码内容（低强度：整体作用 + 2-3 条关键点）",
             variable=self.var_explain,
-        ).pack(anchor="w", padx=10, pady=(8, 2))
-
+        ).pack(anchor="w", pady=3)
         self.var_history = tk.BooleanVar(value=bool(cfg.get("history_enabled", True)))
-        ttk.Checkbutton(
-            opt_box, text="保存历史记录（只存文本，不存截图）",
-            variable=self.var_history,
-        ).pack(anchor="w", padx=10, pady=(2, 2))
-
+        w.Checkbox(
+            options, theme, "保存历史记录（只存文本，不存截图）", variable=self.var_history
+        ).pack(anchor="w", pady=3)
         self.var_focus = tk.BooleanVar(value=bool(cfg.get("popup_steal_focus", True)))
-        ttk.Checkbutton(
-            opt_box, text="小窗弹出时抢占焦点（关掉后只能用 Esc 关窗）",
-            variable=self.var_focus,
-        ).pack(anchor="w", padx=10, pady=(2, 10))
+        w.Checkbox(
+            options, theme, "小窗弹出时抢占焦点（关掉后只能用 Esc 关窗）", variable=self.var_focus
+        ).pack(anchor="w", pady=3)
 
-        actions = tk.Frame(parent, bg="#f7f8fa")
-        actions.pack(fill="x", padx=2, pady=(4, 0))
-        ttk.Button(actions, text="保存设置", command=self._save).pack(side="left")
-        ttk.Button(actions, text="最小化到托盘", command=self.hide).pack(side="left", padx=8)
+        w.separator(page, theme)
+        tk.Frame(page, height=14, bg=theme.bg_base).pack()
+
+        # —— 外观 ——
+        w.SectionTitle(page, theme, "外观", icon_name="palette").pack(anchor="w")
+        appearance = tk.Frame(page, bg=theme.bg_base)
+        appearance.pack(fill="x", pady=(10, 0))
+        self._mode = theme_mod.normalize_mode(cfg.get("theme", "light"))
+        self.mode_switch = w.Segmented(
+            appearance,
+            theme,
+            [(mode, MODE_LABELS[mode], MODE_ICONS[mode]) for mode in MODES],
+            value=self._mode,
+            on_change=self._change_theme,
+        )
+        self.mode_switch.pack(side="left")
+
+        # —— 操作 ——
+        actions = tk.Frame(page, bg=theme.bg_base)
+        actions.pack(fill="x", pady=(20, 6))
+        w.Button(
+            actions, theme, "保存设置", icon_name="save", variant="primary", command=self._save
+        ).pack(side="left")
+        w.Button(
+            actions, theme, "最小化到托盘", icon_name="minimize-2", command=self.hide
+        ).pack(side="left", padx=(8, 0))
+
+    # ---------- 历史页 ----------
 
     def _build_history(self, parent: tk.Frame) -> None:
-        top = tk.Frame(parent, bg="#f7f8fa")
-        top.pack(fill="both", expand=True, padx=2, pady=6)
+        theme = self.theme
+        page = tk.Frame(parent, bg=theme.bg_base)
+        page.pack(fill="both", expand=True, padx=18, pady=(16, 4))
 
-        left = tk.Frame(top, bg="#f7f8fa")
+        body = tk.Frame(page, bg=theme.bg_base)
+        body.pack(fill="both", expand=True)
+
+        left = tk.Frame(body, bg=theme.bg_base)
         left.pack(side="left", fill="y")
-        tk.Label(left, text="记录（只存文本）", bg="#f7f8fa", fg=MUTED, font=(FONT_FAMILY, 9)).pack(anchor="w")
-        self.hist_list = tk.Listbox(left, width=26, font=(FONT_FAMILY, 9), activestyle="none")
-        self.hist_list.pack(fill="y", expand=True)
+        w.SectionTitle(left, theme, "记录", icon_name="history").pack(anchor="w")
+        list_holder = tk.Frame(
+            left, bg=theme.bg_layer2, highlightthickness=1, highlightbackground=theme.border_l2
+        )
+        list_holder.pack(fill="y", expand=True, pady=(8, 0))
+        self.hist_list = tk.Listbox(
+            list_holder,
+            width=28,
+            font=(w.FONT_FAMILY, w.SIZE_SMALL),
+            bg=theme.bg_layer2,
+            fg=theme.label_primary,
+            selectbackground=theme.bg_selected,
+            selectforeground=theme.label_primary,
+            activestyle="none",
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            exportselection=False,
+        )
+        self.hist_list.pack(fill="both", expand=True, padx=6, pady=6)
         self.hist_list.bind("<<ListboxSelect>>", lambda _e: self._show_history_item())
 
-        right = tk.Frame(top, bg="#f7f8fa")
-        right.pack(side="left", fill="both", expand=True, padx=(10, 0))
-        tk.Label(right, text="详情", bg="#f7f8fa", fg=MUTED, font=(FONT_FAMILY, 9)).pack(anchor="w")
+        right = tk.Frame(body, bg=theme.bg_base)
+        right.pack(side="left", fill="both", expand=True, padx=(16, 0))
+        w.SectionTitle(right, theme, "详情", icon_name="scan-line").pack(anchor="w")
+        text_holder = tk.Frame(
+            right, bg=theme.bg_layer2, highlightthickness=1, highlightbackground=theme.border_l2
+        )
+        text_holder.pack(fill="both", expand=True, pady=(8, 0))
         self.hist_text = tk.Text(
-            right, wrap="word", font=(FONT_FAMILY, 10), bd=1, relief="solid",
-            bg="white", padx=8, pady=6, state="disabled",
+            text_holder,
+            wrap="word",
+            width=1,  # 宽度交给 pack 决定；Text 默认 80 字符会把窗口撑得很宽
+            font=(w.FONT_FAMILY, w.SIZE_BODY),
+            bg=theme.bg_layer2,
+            fg=theme.label_primary,
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            padx=10,
+            pady=8,
+            state="disabled",
+            cursor="arrow",
         )
         self.hist_text.pack(fill="both", expand=True)
-        self._hist_items: list[dict[str, Any]] = []
 
-        bottom = tk.Frame(parent, bg="#f7f8fa")
-        bottom.pack(fill="x", padx=2, pady=(0, 6))
-        ttk.Button(bottom, text="刷新", command=self.refresh_history).pack(side="left")
-        ttk.Button(bottom, text="清空历史", command=self._clear_history).pack(side="left", padx=8)
+        bottom = tk.Frame(page, bg=theme.bg_base)
+        bottom.pack(fill="x", pady=(12, 0))
+        w.Button(bottom, theme, "刷新", icon_name="loader-circle", command=self.refresh_history).pack(
+            side="left"
+        )
+        w.Button(bottom, theme, "清空历史", icon_name="x", command=self._clear_history).pack(
+            side="left", padx=(8, 0)
+        )
 
     # ---------- 行为 ----------
+
+    def _change_theme(self, mode: str) -> None:
+        self._mode = mode
+        self._on_theme_change(mode)
 
     def _collect(self) -> dict[str, Any]:
         cfg = dict(self.cfg)
@@ -379,6 +537,7 @@ class MainWindow:
         cfg["show_explanation"] = bool(self.var_explain.get())
         cfg["history_enabled"] = bool(self.var_history.get())
         cfg["popup_steal_focus"] = bool(self.var_focus.get())
+        cfg["theme"] = self._mode
         return cfg
 
     def _save(self) -> None:
@@ -388,37 +547,43 @@ class MainWindow:
         self._on_save(cfg)
         cfgmod.save_config(cfg)
         self.cfg = cfg
-        self.set_status("设置已保存。", OK_GREEN)
+        self.set_status("设置已保存。", self.theme.success)
 
-    def set_status(self, text: str, color: str = MUTED) -> None:
-        self.status.configure(text=text, fg=color)
+    def set_status(self, text: str, color: str | None = None) -> None:
+        if not hasattr(self, "status"):
+            return
+        self.status.configure(text=text, fg=color or self.theme.label_secondary)
 
     def _test_connection(self) -> None:
         payload = self._collect()
-        self.test_btn.configure(state="disabled")
-        self.test_status.configure(text="测试中…", fg=MUTED)
+        self.test_btn.set_enabled(False)
+        self.test_status.configure(text="测试中…", fg=self.theme.label_secondary)
 
         def work() -> None:
             try:
-                msg = api_client.test_connection(payload)
+                message = api_client.test_connection(payload)
                 ok = True
-            except Exception as exc:  # noqa: BLE001 - 要把任何失败都展示给用户
-                msg = str(exc).replace("\n", " ")
+            except Exception as exc:  # noqa: BLE001 - 任何失败都要展示给用户
+                message = str(exc).replace("\n", " ")
                 ok = False
-            self._call_soon(lambda: self._test_done(msg, ok))
+            self._call_soon(lambda: self._test_done(message, ok))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _test_done(self, msg: str, ok: bool) -> None:
-        self.test_btn.configure(state="normal")
-        self.test_status.configure(text=msg[:120], fg=OK_GREEN if ok else ERR_RED)
+    def _test_done(self, message: str, ok: bool) -> None:
+        self.test_btn.set_enabled(True)
+        self.test_status.configure(
+            text=message[:110], fg=self.theme.success if ok else self.theme.error
+        )
 
     def refresh_history(self) -> None:
+        if not hasattr(self, "hist_list"):
+            return
         self._hist_items = cfgmod.load_history()
         self.hist_list.delete(0, "end")
         for item in self._hist_items:
-            when = str(item.get("time", ""))[:19]
-            preview = (str(item.get("translation", "")) or "").replace("\n", " ")[:18]
+            when = str(item.get("time", ""))[11:19] or str(item.get("time", ""))[:19]
+            preview = (str(item.get("translation", "")) or "").replace("\n", " ")[:20]
             self.hist_list.insert("end", f"{when}  {preview}")
         self.hist_text.configure(state="normal")
         self.hist_text.delete("1.0", "end")
@@ -432,20 +597,22 @@ class MainWindow:
         if index >= len(self._hist_items):
             return
         item = self._hist_items[index]
+        theme = self.theme
         self.hist_text.configure(state="normal")
         self.hist_text.delete("1.0", "end")
-        self.hist_text.insert("end", f"时间：{item.get('time', '')}\n")
-        if item.get("model"):
-            self.hist_text.insert("end", f"模型：{item['model']}\n")
-        self.hist_text.insert("end", "\n翻译\n", ("bold",))
+        self.hist_text.tag_configure("head", foreground=theme.label_secondary,
+                                     font=(w.FONT_FAMILY, w.SIZE_SMALL))
+        self.hist_text.tag_configure("section", foreground=theme.brand,
+                                     font=(w.FONT_FAMILY, w.SIZE_BODY, "bold"))
+        self.hist_text.insert("end", f"{item.get('time', '')}   {item.get('model', '')}\n", "head")
+        self.hist_text.insert("end", "\n翻译\n", "section")
         self.hist_text.insert("end", str(item.get("translation", "")) + "\n")
         if item.get("explanation"):
-            self.hist_text.insert("end", "\n解释\n", ("bold",))
+            self.hist_text.insert("end", "\n解释\n", "section")
             self.hist_text.insert("end", str(item["explanation"]) + "\n")
-        self.hist_text.tag_configure("bold", font=(FONT_FAMILY, 10, "bold"))
         self.hist_text.configure(state="disabled")
 
     def _clear_history(self) -> None:
         cfgmod.save_history([], 0)
         self.refresh_history()
-        self.set_status("历史已清空。", MUTED)
+        self.set_status("历史已清空。")

@@ -5,7 +5,7 @@ Windows 桌面小工具。按下全局快捷键框选屏幕上任意区域，松
 
 截图直接交给 DeepSeek 的视觉模型，识别、翻译、解释一次调用完成，本地不需要装 OCR 引擎。
 
-![结果小窗](docs/popup.png)
+![结果小窗](docs/popup-dark.png)
 
 ## 它做什么
 
@@ -14,7 +14,9 @@ Windows 桌面小工具。按下全局快捷键框选屏幕上任意区域，松
 - **不破坏原文**：函数名、变量名、命令、路径、报错原文原样保留，只翻译自然语言。
 - **历史记录**：只存文本和时间戳，不保存截图。
 
-![设置界面](docs/settings.png)
+![设置界面（浅色）](docs/settings-light.png)
+
+![设置界面（深色）](docs/settings-dark.png)
 
 ## 环境要求
 
@@ -45,6 +47,18 @@ python main.py
 | 点 × | 直接退出程序 |
 
 托盘图标右键可「开始框选」「打开设置」「退出」。
+
+## 外观
+
+界面风格对齐 DeepSeek Harness：无彩色强调色、细边框、中性灰阶。主按钮在浅色主题下是黑底白字，
+深色主题下反过来。
+
+「设置 → 外观」可选**浅色 / 深色 / 跟随系统**，默认跟随 Windows 的应用主题，切换即时生效。
+
+窗口标题栏会跟着主题走（用 DWM 的沉浸式深色模式），不会出现浅色标题栏配深色内容区的割裂感。
+框选覆盖层是无彩遮罩加白色边框，尺寸提示实时跟随光标。
+
+图标统一用 [lucide](https://lucide.dev)，24px 网格、2px 圆头描边。
 
 ## 配置文件
 
@@ -81,6 +95,17 @@ DeepSeek 有两个专有参数（关思考模式的 `thinking`、`detail: "origi
 - 有些新模型用 `max_completion_tokens` 取代了 `max_tokens`，如果报这个错，需要改
   [api_client.py](api_client.py) 里的 `max_tokens`
 - 换厂商后翻译质量、代码理解能力、速度都会变，自己试一下再定
+
+## 更换图标
+
+图标源文件在 `assets/icons/src/*.svg`，是从 lucide 拉下来的原始 SVG。换图标两步：
+
+1. 把新的 SVG 放进 `assets/icons/src/`
+2. 运行 `python build_icons.py`
+
+脚本自己解析 SVG（只用到 `path` / `circle` / `rect` / `line` 四种元素和少数几种路径命令），
+渲染成 96×96 的白色 PNG，并顺带生成多尺寸的 `icon.ico`。
+图标在运行时按主题着色，所以一套 PNG 就同时适配浅色和深色，不用维护两套资源。
 
 ## 打包成单文件 exe
 

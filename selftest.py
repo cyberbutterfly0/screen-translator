@@ -77,8 +77,26 @@ def main() -> int:
         failures += 1
         print(f"  {FAIL} 注册失败: {exc}")
 
+    print("\n[5] 图标资源")
+    import icons
+
+    names = icons.available()
+    if names:
+        print(f"  {OK} {len(names)} 个图标：{', '.join(names[:8])} ...")
+        missing = [
+            name
+            for name in ("scan-text", "sun", "moon", "settings", "x", "copy")
+            if name not in names
+        ]
+        if missing:
+            failures += 1
+            print(f"  {FAIL} 缺少图标：{', '.join(missing)}（跑 python build_icons.py 重新生成）")
+    else:
+        failures += 1
+        print(f"  {FAIL} 找不到图标目录 {icons.asset_dir()}")
+
     if args.api:
-        print("\n[5] API 调用")
+        print("\n[6] API 调用")
         import api_client
 
         try:
@@ -87,7 +105,7 @@ def main() -> int:
             failures += 1
             print(f"  {FAIL} {exc}")
     else:
-        print("\n[5] API 调用（加 --api 参数才会测）")
+        print("\n[6] API 调用（加 --api 参数才会测）")
 
     print("\n" + "=" * 60)
     print(f"自检完成，失败项：{failures}")

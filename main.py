@@ -20,13 +20,16 @@ from ctypes import wintypes
 from datetime import datetime
 from typing import Any, Callable
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 import api_client
 import capture as capture_mod
 import config as cfgmod
-from capture import select_region, virtual_screen_rect
-from popup import FONT_FAMILY, ResultPopup
+import icons
+import theme as theme_mod
+import widgets as w
+from capture import virtual_screen_rect
+from popup import ResultPopup
 from settings_ui import MainWindow
 
 MUTEX_NAME = "Global\\ScreenTranslator_SingleInstance"
@@ -77,27 +80,25 @@ def system_dpi() -> int:
 
 
 def make_tray_image() -> Image.Image:
+    """托盘图标：和 exe 图标同款的深色圆角底 + lucide 白色图标。"""
     size = 64
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle((2, 2, size - 3, size - 3), radius=14, fill=(26, 86, 219, 255))
-    font = None
-    for path in (r"C:\Windows\Fonts\msyhbd.ttc", r"C:\Windows\Fonts\msyh.ttc"):
-        try:
-            font = ImageFont.truetype(path, 38)
-            break
-        except Exception:
-            continue
-    if font is not None:
-        draw.text((size / 2, size / 2 - 2), "译", font=font, fill="white", anchor="mm")
-    else:
-        draw.rectangle((18, 24, 46, 40), fill="white")
-    return img
+    plate = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    ImageDraw.Draw(plate).rounded_rectangle(
+        (0, 0, size - 1, size - 1), radius=15, fill=(21, 21, 23, 255)
+    )
+    source = icons.asset_dir() / "scan-text.png"
+    if source.exists():
+        glyph = Image.open(source).convert("RGBA")
+        inner = int(size * 0.62)
+        glyph = glyph.resize((inner, inner), Image.LANCZOS)
+        plate.alpha_composite(glyph, ((size - inner) // 2, (size - inner) // 2))
+    return plate
 
 
 class App:
     def __init__(self) -> None:
         self.cfg = cfgmod.load_config()
+        self.theme = theme_mod.resolve(theme_mod.normalize_mode(self.cfg.get("theme")))
         self._tasks: queue.Queue[Callable[[], None]] = queue.Queue()
         self._busy = False
         self._quitting = False
@@ -111,16 +112,18 @@ class App:
         self.root.withdraw()
         self._apply_scaling()
 
+        self.popup = ResultPopup(self.root, self.cfg, self.theme)
         self.main_window = MainWindow(
             self.root,
             self.cfg,
+            self.theme,
             on_save=self._on_settings_saved,
             on_quit=self.quit,
             call_soon=self.call_soon,
             on_hotkey_pause=self._pause_hotkeys,
             on_hotkey_resume=self._resume_hotkeys,
+            on_theme_change=self._on_theme_change,
         )
-        self.popup = ResultPopup(self.root, self.cfg)
 
         self._register_hotkeys()
         self._start_tray()
@@ -140,7 +143,7 @@ class App:
             pass
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
             try:
-                tkfont.nametofont(name).configure(family=FONT_FAMILY, size=10)
+                tkfont.nametofont(name).configure(family=w.FONT_FAMILY, size=10)
             except tk.TclError:
                 pass
 
@@ -168,7 +171,7 @@ class App:
         try:
             import keyboard
         except Exception as exc:  # noqa: BLE001
-            self.main_window.set_status(f"全局热键不可用：{exc}", "#c0392b")
+            self.main_window.set_status(f"全局热键不可用：{exc}", self.theme.error)
             return
 
         hotkey = self.cfg.get("hotkey") or "ctrl+alt+t"
@@ -186,7 +189,7 @@ class App:
         try:
             self._hotkey_handles.append(keyboard.add_hotkey(hotkey, on_hotkey, suppress=False))
         except Exception as exc:  # noqa: BLE001
-            self.main_window.set_status(f"快捷键 {hotkey} 注册失败：{exc}", "#c0392b")
+            self.main_window.set_status(f"快捷键 {hotkey} 注册失败：{exc}", self.theme.error)
             return
 
         try:
@@ -195,7 +198,7 @@ class App:
             pass  # Esc 兜底失败不影响主流程
 
         self.main_window.set_status(
-            f"就绪。按 {hotkey.upper()} 开始框选，Esc 关闭小窗。", "#1a7f37"
+            f"就绪。按 {hotkey.upper()} 开始框选，Esc 关闭小窗。", self.theme.success
         )
 
     def _unregister_hotkeys(self) -> None:
@@ -342,7 +345,22 @@ class App:
         if cfg.get("hotkey") != old_hotkey:
             self._register_hotkeys()
         else:
-            self.main_window.set_status(f"就绪。按 {(cfg.get('hotkey') or '').upper()} 开始框选。", "#1a7f37")
+            self.main_window.set_status(
+                f"就绪。按 {(cfg.get('hotkey') or '').upper()} 开始框选。", self.theme.success
+            )
+
+    def _on_theme_change(self, mode: str) -> None:
+        """外观模式变了：解析成具体主题并重建所有窗口。"""
+        self.cfg["theme"] = mode
+        try:
+            cfgmod.save_config(self.cfg)
+        except OSError as exc:
+            print(f"[theme] 保存外观设置失败：{exc}", file=sys.stderr)
+        self.theme = theme_mod.resolve(mode)
+        icons.store.clear()  # 旧颜色的图标缓存没用了
+        self.main_window.cfg = self.cfg
+        self.main_window.set_theme(self.theme)
+        self.popup.set_theme(self.theme)
 
     def quit(self) -> None:
         if self._quitting:
@@ -362,7 +380,7 @@ class App:
 
     def run(self) -> None:
         if not (self.cfg.get("api_key") or "").strip():
-            self.main_window.set_status("还没填 API Key，填好后点「保存设置」。", "#b45309")
+            self.main_window.set_status("还没填 API Key，填好后点「保存设置」。", self.theme.warn)
         elif not self._hotkey_handles:
             pass
         self.main_window.show()

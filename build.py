@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -53,6 +54,9 @@ def main() -> int:
         # keyboard 通过 ctypes 调 Win32 钩子，同样需要显式声明
         "--hidden-import",
         "keyboard",
+        # lucide 图标资源要一起打进去，运行时会从 sys._MEIPASS 读
+        "--add-data",
+        f"{ROOT / 'assets' / 'icons'}{os.pathsep}assets/icons",
     ]
     if ICON.exists():
         command += ["--icon", str(ICON)]

@@ -264,7 +264,7 @@ class RegionSelector:
 
         if self._rect is None:
             self._rect = self._canvas.create_rectangle(
-                x1, y1, x2, y2, outline="#4ea1ff", width=2
+                x1, y1, x2, y2, outline="#ffffff", width=2
             )
         else:
             self._canvas.coords(self._rect, x1, y1, x2, y2)
@@ -277,7 +277,7 @@ class RegionSelector:
                 hint_x,
                 hint_y,
                 text=label,
-                fill="#ffe066",
+                fill="#ffffff",
                 anchor="nw",
                 font=("Segoe UI", 13, "bold"),
             )

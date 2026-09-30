@@ -34,8 +34,9 @@ DEFAULTS: dict[str, Any] = {
     # 代价是会打断你正在输入的窗口。改成 False 则靠全局 Esc 兜底关闭。
     "popup_steal_focus": True,
     # —— 外观 ——
+    "theme": "system",  # light / dark / system（跟随 Windows 应用主题）
     "font_size": 11,
-    "popup_opacity": 0.96,
+    "popup_opacity": 0.97,
     "popup_width": 560,
     "popup_height": 420,
     # —— 历史 ——
