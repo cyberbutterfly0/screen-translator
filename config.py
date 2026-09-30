@@ -153,12 +153,27 @@ def load_config() -> dict[str, Any]:
     return cfg
 
 
+def backup_path() -> Path:
+    return config_dir() / "config.backup.json"
+
+
 def save_config(cfg: dict[str, Any]) -> None:
-    """写入配置（只保留已知字段，避免脏数据回流）。"""
+    """写入配置（只保留已知字段，避免脏数据回流）。
+
+    覆盖前先把现有配置备份成 ``config.backup.json``：
+    万一误把 API Key 清空了，还能从备份里找回。
+    """
     _ensure_dir()
+    path = config_path()
+    if path.exists():
+        try:
+            backup_path().write_bytes(path.read_bytes())
+        except OSError:
+            pass  # 备份失败不该阻止保存
+
     clean = {k: cfg.get(k, v) for k, v in DEFAULTS.items()}
     clean["api_key"] = encrypt_secret(str(clean.get("api_key") or ""))
-    config_path().write_text(
+    path.write_text(
         json.dumps(clean, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

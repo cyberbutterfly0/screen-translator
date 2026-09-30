@@ -104,11 +104,16 @@ gh release view v1.0.1 --json assets --jq '.assets[] | {name, digest}'
 配置和数据都在 `%APPDATA%\ScreenTranslator\`：
 
 - `config.json` —— 设置。API Key 用 Windows DPAPI 加密后保存（`dpapi:` 前缀）
+- `config.backup.json` —— 上一次保存前的配置备份
 - `history.json` —— 历史记录，只有文本
 - `app.log` —— 运行日志，出问题时把它发给开发者
 
 字段模板见 `config.example.json`。开发时可以用环境变量 `SCREEN_TRANSLATOR_HOME`
 把数据目录指到别处，避免污染正式配置。
+
+**API Key 有三层防误删**：设置里默认是**锁定**的（掩码显示），点旁边的「修改」才能编辑；
+万一清空了，保存时会先弹确认；而且每次覆盖配置前都会自动留一份 `config.backup.json`，
+真丢了可以从这里找回。
 
 ## 费用
 

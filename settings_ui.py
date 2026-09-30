@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import threading
 import tkinter as tk
+from tkinter import messagebox
 from typing import Any, Callable
 
 import api_client
@@ -346,9 +347,19 @@ class MainWindow:
         form.columnconfigure(1, weight=1)
 
         self._field_label(form, 0, "API Key")
+        key_row = tk.Frame(form, bg=theme.bg_base)
+        key_row.grid(row=0, column=1, columnspan=2, sticky="ew", pady=5)
+        key_row.columnconfigure(0, weight=1)
         self.var_key = tk.StringVar(value=cfg.get("api_key", ""))
-        self.key_input = w.Input(form, theme, textvariable=self.var_key, show="•", width=34)
-        self.key_input.grid(row=0, column=1, columnspan=2, sticky="ew", pady=5)
+        # 默认锁定成只读，点「修改」才解锁——防止顺手把已配置的 Key 清掉
+        self.key_input = w.Input(
+            key_row, theme, textvariable=self.var_key, show="•", width=30, readonly=True
+        )
+        self.key_input.grid(row=0, column=0, sticky="ew")
+        self.key_edit_btn = w.Button(
+            key_row, theme, "修改", icon_name="key-round", command=self._toggle_key_lock
+        )
+        self.key_edit_btn.grid(row=0, column=1, padx=(8, 0))
 
         self._field_label(form, 1, "Base URL")
         self.var_base = tk.StringVar(value=cfg.get("base_url", ""))
@@ -540,13 +551,40 @@ class MainWindow:
         cfg["theme"] = self._mode
         return cfg
 
+    def _toggle_key_lock(self) -> None:
+        """在「锁定」和「可编辑」之间切换。"""
+        if self.key_input.readonly:
+            self.key_input.set_readonly(False)
+            self.key_edit_btn.set_text("锁定")
+            self.key_edit_btn.set_icon("check")
+            self.set_status("API Key 已解锁，改完记得点「保存设置」。")
+        else:
+            self.key_input.set_readonly(True)
+            self.key_edit_btn.set_text("修改")
+            self.key_edit_btn.set_icon("key-round")
+            self.set_status("API Key 已锁定，不会被误改。")
+
     def _save(self) -> None:
         cfg = self._collect()
+        # 防误删：原本有 Key，这次却要存成空的，先问一句
+        if self.cfg.get("api_key") and not cfg.get("api_key"):
+            if not messagebox.askyesno(
+                "确认清空",
+                "保存后会把已配置的 API Key 清空，程序将无法调用模型。\n\n确定要清空吗？",
+                parent=self.win,
+                default="no",
+            ):
+                self.var_key.set(self.cfg.get("api_key", ""))
+                self.set_status("已取消，API Key 保持不变。", self.theme.warn)
+                return
         if self._recorder is not None:
             self._recorder.stop_record(cancelled=False)
         self._on_save(cfg)
         cfgmod.save_config(cfg)
         self.cfg = cfg
+        self.key_input.set_readonly(True)
+        self.key_edit_btn.set_text("修改")
+        self.key_edit_btn.set_icon("key-round")
         self.set_status("设置已保存。", self.theme.success)
 
     def set_status(self, text: str, color: str | None = None) -> None:

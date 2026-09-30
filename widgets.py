@@ -135,6 +135,14 @@ class Button(tk.Frame):
         if self._text_label is not None:
             self._text_label.configure(text=text)
 
+    def set_icon(self, icon_name: str) -> None:
+        self._icon_name = icon_name
+        if self._icon_label is not None:
+            photo = icons.icon(icon_name, 15, self._fg)
+            if photo is not None:
+                self._icon_label.configure(image=photo)
+                self._icon_label.image = photo  # type: ignore[attr-defined]
+
     def _paint(self, bg: str) -> None:
         self.configure(bg=bg)
         for child in self.winfo_children():
@@ -231,8 +239,10 @@ class Input(tk.Frame):
         show: str = "",
         width: int = 30,
         font_size: int = SIZE_BODY,
+        readonly: bool = False,
     ) -> None:
         self.theme = theme
+        self._readonly = readonly
         super().__init__(
             master,
             bg=theme.bg_layer2,
@@ -253,10 +263,23 @@ class Input(tk.Frame):
             insertbackground=theme.label_primary,
             font=(FONT_FAMILY, font_size),
             highlightthickness=0,
+            state="readonly" if readonly else "normal",
+            readonlybackground=theme.bg_layer2,
         )
         self.entry.pack(fill="x", padx=8, pady=6)
         self.entry.bind("<FocusIn>", lambda _e: self.configure(highlightbackground=theme.brand))
         self.entry.bind("<FocusOut>", lambda _e: self.configure(highlightbackground=theme.border_l2))
+
+    @property
+    def readonly(self) -> bool:
+        return self._readonly
+
+    def set_readonly(self, readonly: bool) -> None:
+        """锁定/解锁输入。锁定时仍然可以选中复制，但改不了内容。"""
+        self._readonly = readonly
+        self.entry.configure(state="readonly" if readonly else "normal")
+        if not readonly:
+            self.entry.focus_set()
 
     def get(self) -> str:
         return self.entry.get()

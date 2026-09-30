@@ -105,6 +105,20 @@ class ConfigIOTests(TempHomeTestCase):
         self.assertNotIn("ghijklmnop", masked)
         self.assertTrue(masked.startswith("sk-abc"))
 
+    def test_save_backs_up_previous_config(self):
+        """覆盖配置前留一份备份：万一误清空了 API Key 还能找回。"""
+        cfg = cfgmod.load_config()
+        cfg["api_key"] = "first-key"
+        cfgmod.save_config(cfg)
+        self.assertFalse(cfgmod.backup_path().exists(), "首次保存没有旧文件，不该产生备份")
+
+        cfg["api_key"] = "second-key"
+        cfgmod.save_config(cfg)
+        self.assertTrue(cfgmod.backup_path().exists(), "覆盖前应该生成备份")
+
+        backup = json.loads(cfgmod.backup_path().read_text(encoding="utf-8"))
+        self.assertEqual(cfgmod.decrypt_secret(backup["api_key"]), "first-key")
+
 
 @unittest.skipUnless(sys.platform == "win32", "DPAPI 只在 Windows 上可用")
 class SecretProtectionTests(TempHomeTestCase):
