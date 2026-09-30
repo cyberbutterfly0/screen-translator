@@ -116,6 +116,33 @@ python build.py
 
 产物是 `dist/ScreenTranslator.exe`，双击即可运行，目标机器不需要装 Python。
 
+## 开发
+
+```powershell
+pip install -r requirements-dev.txt
+
+# 单元测试
+python -m unittest discover -s tests -t . -v
+
+# 环境自检（加 --api 会真实调用一次模型）
+python selftest.py --api
+```
+
+仓库带两条 GitHub Actions 流水线：
+
+- `ci.yml` —— push / PR 时跑语法检查、单元测试、图标重新生成，并完整打包一次 exe
+- `release.yml` —— 推送 `v*` tag 时自动打包并把 exe 附到 Release
+
+所以发新版本可以简化成两步：
+
+```powershell
+git tag -a v1.0.1 -m "更新说明"
+git push origin v1.0.1
+```
+
+`tests/test_config.py` 里有一条测试会扫描所有源码，确保 `DEFAULTS` 里的每个配置项
+都真的被消费——防止再出现"定义了但没人用"的幽灵配置。
+
 ## 已知限制
 
 - **管理员权限的窗口**：目标窗口若以管理员身份运行，普通权限下的本程序可能收不到热键或截到黑屏，

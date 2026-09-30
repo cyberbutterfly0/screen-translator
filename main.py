@@ -32,7 +32,9 @@ from capture import virtual_screen_rect
 from popup import ResultPopup
 from settings_ui import MainWindow
 
-MUTEX_NAME = "Global\\ScreenTranslator_SingleInstance"
+# 用 Local\ 而不是 Global\：Global 命名空间要 SeCreateGlobalPrivilege，
+# 普通权限用户下 CreateMutexW 会直接失败，单实例保护会静默失效。
+MUTEX_NAME = "Local\\ScreenTranslator_SingleInstance"
 ERROR_ALREADY_EXISTS = 183
 
 # 保持互斥体句柄引用，否则会被 GC 关掉，单实例保护就失效了
@@ -101,6 +103,8 @@ class App:
         self.theme = theme_mod.resolve(theme_mod.normalize_mode(self.cfg.get("theme")))
         self._tasks: queue.Queue[Callable[[], None]] = queue.Queue()
         self._busy = False
+        #: 每次框选递增；回调时序号对不上，说明期间又框选了一次，这个结果已经过期
+        self._request_seq = 0
         self._quitting = False
         self._hotkey_suspended = False
         self._popup_visible = False
@@ -284,11 +288,18 @@ class App:
         self._popup_visible = True
 
         image = selection.image
+        self._request_seq += 1
+        seq = self._request_seq
         threading.Thread(
-            target=self._request_worker, args=(image, anchor), name="api", daemon=True
+            target=self._request_worker,
+            args=(image, anchor, seq),
+            name="api",
+            daemon=True,
         ).start()
 
-    def _request_worker(self, image: Image.Image, anchor: tuple[int, int, int, int]) -> None:
+    def _request_worker(
+        self, image: Image.Image, anchor: tuple[int, int, int, int], seq: int
+    ) -> None:
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         png = buffer.getvalue()
@@ -297,11 +308,17 @@ class App:
             result = api_client.translate_image(png, self.cfg, want_explanation=want_explanation)
         except Exception as exc:  # noqa: BLE001
             message = str(exc)
-            self.call_soon(lambda m=message: self._on_error(m, anchor))
+            self.call_soon(lambda m=message: self._on_error(m, anchor, seq))
             return
-        self.call_soon(lambda r=result: self._on_result(r, anchor))
+        self.call_soon(lambda r=result: self._on_result(r, anchor, seq))
 
-    def _on_result(self, result: api_client.Result, anchor: tuple[int, int, int, int]) -> None:
+    def _on_result(
+        self, result: api_client.Result, anchor: tuple[int, int, int, int], seq: int
+    ) -> None:
+        if seq != self._request_seq:
+            # 期间又框选过，这个结果属于上一次，直接丢弃，
+            # 否则它会盖掉更新的那一份
+            return
         meta_parts: list[str] = []
         if result.elapsed:
             meta_parts.append(f"{result.elapsed:.1f} 秒")
@@ -331,7 +348,9 @@ class App:
             except OSError as exc:
                 print(f"[history] {exc}", file=sys.stderr)
 
-    def _on_error(self, message: str, anchor: tuple[int, int, int, int]) -> None:
+    def _on_error(self, message: str, anchor: tuple[int, int, int, int], seq: int) -> None:
+        if seq != self._request_seq:
+            return
         self.popup.show_error(message, anchor)
         self._popup_visible = True
 

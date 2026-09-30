@@ -304,6 +304,44 @@ def _parse_json_mode(text: str) -> Result:
     return result
 
 
+def _extract_json_text(text: str) -> str | None:
+    """从可能带 markdown 围栏或前后废话的回复里抠出 JSON 对象。"""
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.split("\n", 1)[-1] if "\n" in stripped else ""
+        if stripped.rstrip().endswith("```"):
+            stripped = stripped.rstrip()[:-3]
+        stripped = stripped.strip()
+        if stripped[:4].lower() == "json":
+            stripped = stripped[4:].strip()
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    return stripped[start : end + 1]
+
+
+def _parse_json_with_repair(text: str, notes: list[str]) -> Result | None:
+    """先直接解析，失败再试着把 JSON 抠出来。
+
+    抠得出来就不重发请求了 —— 重发会把整张图再计一次 token，
+    为了一个格式问题付双份钱不划算。
+    """
+    try:
+        return _parse_json_mode(text)
+    except (ValueError, json.JSONDecodeError):
+        pass
+    candidate = _extract_json_text(text)
+    if candidate is None:
+        return None
+    try:
+        result = _parse_json_mode(candidate)
+    except (ValueError, json.JSONDecodeError):
+        return None
+    notes.append("模型输出带了额外包裹，已自动提取 JSON")
+    return result
+
+
 def translate_image(
     image_bytes: bytes,
     cfg: dict[str, Any],
@@ -341,10 +379,14 @@ def translate_image(
         resp = _post_with_fallback(url, payload, api_key, timeout, notes)
         text = _extract_content(resp)
         if text:
-            result = finish(_parse_json_mode(text), resp, payload["model"])
-            if result.translation:
-                return result
-            errors.append("模型返回的 translation 为空")
+            parsed = _parse_json_with_repair(text, notes)
+            if parsed is None:
+                errors.append("JSON 解析失败")
+            else:
+                result = finish(parsed, resp, payload["model"])
+                if result.translation:
+                    return result
+                errors.append("模型返回的 translation 为空")
         else:
             # 官方文档明确提示 JSON 模式偶尔会返回空 content。
             errors.append("JSON 模式返回了空内容")

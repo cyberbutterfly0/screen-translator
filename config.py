@@ -28,8 +28,6 @@ DEFAULTS: dict[str, Any] = {
     # —— 交互 ——
     "hotkey": "ctrl+alt+t",
     "show_explanation": True,
-    "explain_style": "brief",  # brief：整体作用 + 2-3 条关键点
-    "show_popup_at_cursor": True,
     # 小窗弹出时是否抢占焦点。抢焦点能保证 Esc 和 Ctrl+C 立刻可用，
     # 代价是会打断你正在输入的窗口。改成 False 则靠全局 Esc 兜底关闭。
     "popup_steal_focus": True,
