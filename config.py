@@ -18,7 +18,7 @@ from typing import Any
 
 APP_NAME = "ScreenTranslator"
 APP_TITLE = "屏幕翻译"
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 
 #: 默认配置。新增字段时只要在这里补一行，旧配置文件会在读取时自动补齐。
 DEFAULTS: dict[str, Any] = {
