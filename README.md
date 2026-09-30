@@ -142,6 +142,14 @@ EV 证书更贵，好处是立刻获得信誉。除此之外的办法都只是�
 万一清空了，保存时会先弹确认；而且每次覆盖配置前都会自动留一份 `config.backup.json`，
 真丢了可以从这里找回。
 
+API Key 用 Windows DPAPI 加密后存储。**如果当前环境用不了 DPAPI**（受限账户、沙箱、
+部分企业安全策略），程序不会偷偷存明文：保存前会先探测，弹框告诉你"将以明文存储"，
+默认选择不保存。`python selftest.py` 也会报告 DPAPI 是否可用以及具体错误码。
+
+> 有反馈指出，错误码 `2`（`ERROR_FILE_NOT_FOUND`）常见于该账户的 DPAPI 主密钥文件缺失
+> （一般位于 `%APPDATA%\Microsoft\Protect\<SID>\`）。这条线索未在本项目里复现验证过，
+> 仅作排查方向参考。
+
 ## 费用
 
 按 DeepSeek 官方计费，单张截图最多按 1024 tokens 计。一次框选翻译实际约 800-1000 tokens，
@@ -217,12 +225,17 @@ python selftest.py --api
 - `ci.yml` —— push / PR 时跑语法检查、单元测试、图标重新生成，并完整打包一次 exe
 - `release.yml` —— 推送 `v*` tag 时自动打包并把 exe 附到 Release
 
-所以发新版本可以简化成两步：
+所以发新版本用脚本，它会把顺序固定死：
 
 ```powershell
-git tag -a v1.0.1 -m "更新说明"
-git push origin v1.0.1
+python release.py 1.0.7 "这一版改了什么"
 ```
+
+脚本会校验工作区干净、更新 `APP_VERSION`、提交、**先推 main 再打 tag**、最后推送 tag，
+剩下的交给 CI。
+
+之所以不让手工敲这几条：早期手工发版连续两次出现「tag 落后于 main」——先打了 tag、
+之后又提交了东西，结果 Release 的源码比 main 少一个修复，用户下载到的版本是残的。
 
 `tests/test_config.py` 里有一条测试会扫描所有源码，确保 `DEFAULTS` 里的每个配置项
 都真的被消费——防止再出现"定义了但没人用"的幽灵配置。
