@@ -164,6 +164,22 @@ class SecretFallbackTests(TempHomeTestCase):
         cfgmod.save_config(cfg)
         self.assertEqual(cfgmod.load_config()["api_key"], self.SECRET)
 
+    def test_plaintext_fallback_roundtrips_through_disk(self):
+        """降级路径也要验证「存盘 → 读回」。
+
+        mock 掉 DPAPI 之后，落盘的应当是明文（调用方已被告知），
+        并且读回来仍是原来的值。
+        """
+        with mock.patch.object(cfgmod, "_dpapi", return_value=None):
+            cfg = cfgmod.load_config()
+            cfg["api_key"] = self.SECRET
+            cfgmod.save_config(cfg)
+
+            raw = cfgmod.config_path().read_text(encoding="utf-8")
+            self.assertIn(self.SECRET, raw, "降级时确实是明文写进了文件")
+            self.assertNotIn(cfgmod.SECRET_PREFIX, raw)
+            self.assertEqual(cfgmod.load_config()["api_key"], self.SECRET)
+
 
 @unittest.skipUnless(sys.platform == "win32", "DPAPI 只在 Windows 上可用")
 class SecretProtectionTests(TempHomeTestCase):
