@@ -13,8 +13,10 @@ path / circle / rect / line 四种元素和少数几种路径命令，自己解�
 
 from __future__ import annotations
 
+import io
 import math
 import re
+import struct
 import sys
 from pathlib import Path
 
@@ -369,6 +371,60 @@ def build_icons() -> int:
     return 0
 
 
+def _encode_bmp_entry(image: Image.Image) -> bytes:
+    """把 RGBA 图像编码成 ICO 条目里的 BMP/DIB 数据。
+
+    为什么不用 ``Image.save(..., format="ICO")``：Pillow 12 的 ICO 保存器会把**所有**
+    尺寸都写成 PNG 压缩。而标准 ICO 只有 256×256 该用 PNG，小尺寸必须是未压缩的 DIB——
+    资源管理器渲染桌面图标时走的是严格路径，遇到"全 PNG 的 ICO"会直接放弃、显示默认图标
+    （``ExtractIconEx`` 却能读，所以光用 API 验证会漏掉这个问题）。
+    """
+    width, height = image.size
+    header = struct.pack(
+        "<IiiHHIIiiII",
+        40,  # biSize
+        width,  # biWidth
+        height * 2,  # biHeight：DIB 里是 XOR 图 + AND 掩码，所以写两倍
+        1,  # biPlanes
+        32,  # biBitCount
+        0,  # biCompression = BI_RGB
+        0,  # biSizeImage
+        0, 0, 0, 0,
+    )
+    raw = image.tobytes("raw", "BGRA")
+    stride = width * 4
+    rows = [raw[i * stride : (i + 1) * stride] for i in range(height)]
+    rows.reverse()  # DIB 自下而上存储
+    xor_data = b"".join(rows)
+
+    # 32 位图靠 alpha 通道做透明，AND 掩码全 0 即可，但仍要占位
+    mask_stride = ((width + 31) // 32) * 4
+    and_data = b"\x00" * (mask_stride * height)
+    return header + xor_data + and_data
+
+
+def write_ico(path: Path, images: list[tuple[int, Image.Image]]) -> None:
+    """自己拼一个标准 ICO：128 及以下用 BMP/DIB，256 用 PNG。"""
+    blobs: list[bytes] = []
+    entries: list[bytes] = []
+    offset = 6 + 16 * len(images)
+
+    for size, image in images:
+        if size >= 256:
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            blob = buffer.getvalue()
+        else:
+            blob = _encode_bmp_entry(image)
+        dim = 0 if size >= 256 else size  # 目录项里 256 要写成 0
+        entries.append(struct.pack("<BBBBHHII", dim, dim, 0, 0, 1, 32, len(blob), offset))
+        blobs.append(blob)
+        offset += len(blob)
+
+    header = struct.pack("<HHH", 0, 1, len(images))
+    path.write_bytes(header + b"".join(entries) + b"".join(blobs))
+
+
 def build_app_icon() -> None:
     """应用图标：深色圆角底 + 白色 scan-text。"""
     source = SRC_DIR / "scan-text.svg"
@@ -380,7 +436,6 @@ def build_app_icon() -> None:
     size = 256
     # 内缩留白，让图标在圆角底上不顶边
     canvas = int(round(size * SUPERSAMPLE))
-    scale = canvas / VIEWBOX
     plate = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
     ImageDraw.Draw(plate).rounded_rectangle(
         [0, 0, canvas - 1, canvas - 1], radius=int(canvas * 0.22), fill=APP_BG
@@ -391,12 +446,10 @@ def build_app_icon() -> None:
     offset = (canvas - glyph.width) // 2
     plate.alpha_composite(glyph, (offset, offset))
 
-    icon = plate.resize((size, size), Image.LANCZOS)
-    icon.save(
-        APP_ICON,
-        sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
-    )
-    print(f"  {'icon.ico':16s} -> {size}x{size} 多尺寸")
+    master = plate.resize((size, size), Image.LANCZOS)
+    sizes = (16, 24, 32, 48, 64, 128, 256)
+    write_ico(APP_ICON, [(s, master.resize((s, s), Image.LANCZOS)) for s in sizes])
+    print(f"  {'icon.ico':16s} -> {size}x{size} 多尺寸（{len(sizes)} 个，小尺寸用 BMP/DIB）")
 
 
 if __name__ == "__main__":
