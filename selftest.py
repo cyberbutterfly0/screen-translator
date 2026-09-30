@@ -124,6 +124,13 @@ def check_icons(report: Report) -> None:
     if missing:
         report.fail(f"缺少图标：{', '.join(missing)}")
 
+    icon_file = icons.app_icon_path()
+    if icon_file is None:
+        report.fail("找不到 icon.ico，窗口和任务栏会退回默认图标")
+        report.info("跑 python build_icons.py 重新生成")
+    else:
+        report.ok(f"程序图标：{icon_file}")
+
 
 def check_api(report: Report) -> None:
     import api_client

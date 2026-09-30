@@ -21,18 +21,19 @@ NAME = "ScreenTranslator"
 
 
 def make_icon() -> None:
-    """用和托盘图标一致的图案生成多尺寸 ico。"""
+    """生成多尺寸 icon.ico。
+
+    这里直接复用 ``build_icons.build_app_icon()``，它用的是 256×256 的源图。
+    注意不要把 64×64 的托盘图拿来当源图——Pillow 保存 ICO 时会**跳过比源图更大的尺寸**，
+    那样最终 ico 里只剩 16~64，桌面在大图标视图（125% 缩放下要 96~128）下会找不到合适尺寸，
+    直接回退成默认图标。
+    """
     try:
-        from main import make_tray_image
+        import build_icons
     except Exception as exc:  # noqa: BLE001
         print(f"跳过图标生成（{exc}），将使用 PyInstaller 默认图标")
         return
-    image = make_tray_image()
-    image.save(
-        ICON,
-        sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
-    )
-    print(f"图标已生成：{ICON}")
+    build_icons.build_app_icon()
 
 
 def main() -> int:
@@ -54,9 +55,11 @@ def main() -> int:
         # keyboard 通过 ctypes 调 Win32 钩子，同样需要显式声明
         "--hidden-import",
         "keyboard",
-        # lucide 图标资源要一起打进去，运行时会从 sys._MEIPASS 读
+        # 图标资源要一起打进去：assets/icons 是界面小图标，icon.ico 是窗口/任务栏图标
         "--add-data",
         f"{ROOT / 'assets' / 'icons'}{os.pathsep}assets/icons",
+        "--add-data",
+        f"{ICON}{os.pathsep}.",
     ]
     if ICON.exists():
         command += ["--icon", str(ICON)]

@@ -120,6 +120,7 @@ class App:
 
         self.root = tk.Tk()
         self.root.withdraw()
+        self._apply_icon()
         self._apply_scaling()
 
         self.popup = ResultPopup(self.root, self.cfg, self.theme)
@@ -143,6 +144,21 @@ class App:
     def call_soon(self, func: Callable[[], None]) -> None:
         """线程安全：把回调排进主线程执行。"""
         self._tasks.put(func)
+
+    def _apply_icon(self) -> None:
+        """设置窗口标题栏和任务栏图标。
+
+        用 ``default=`` 是为了让之后创建的每个 Toplevel（主窗口、结果小窗）都继承它，
+        否则任务栏上显示的还是 Tk 自带的羽毛图标。
+        """
+        icon = icons.app_icon_path()
+        if icon is None:
+            self.log.warning("找不到 icon.ico，窗口图标保持默认")
+            return
+        try:
+            self.root.iconbitmap(default=str(icon))
+        except tk.TclError:
+            self.log.exception("设置窗口图标失败")
 
     def _apply_scaling(self) -> None:
         """DPI aware 之后 tk 不再自动放大字体，这里手动对齐系统缩放。"""

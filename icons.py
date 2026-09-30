@@ -22,6 +22,17 @@ def asset_dir() -> Path:
     return Path(__file__).resolve().parent / "assets" / "icons"
 
 
+def app_icon_path() -> Path | None:
+    """程序图标 ``icon.ico`` 的路径（窗口标题栏和任务栏用）。
+
+    打包后它被放在 ``sys._MEIPASS`` 根目录，源码运行时就在项目根目录。
+    """
+    bundled = getattr(sys, "_MEIPASS", None)
+    base = Path(bundled) if bundled else Path(__file__).resolve().parent
+    candidate = base / "icon.ico"
+    return candidate if candidate.exists() else None
+
+
 def _rgb(color: str) -> tuple[int, int, int]:
     value = color.lstrip("#")
     if len(value) == 8:
